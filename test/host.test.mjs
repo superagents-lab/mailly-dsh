@@ -418,3 +418,100 @@ test('automation requires a boolean and reports the stored state once enabled', 
     wired.dispose()
   }
 })
+
+test('enabling automation starts the poller and a new email creates one session', async () => {
+  const sessions = { created: [], prompts: [] }
+  const polls = []
+  const upstreamFetch = globalThis.fetch
+  globalThis.fetch = async (url, options = {}) => {
+    const target = String(url)
+    if (target.includes('/inbox/messages/wait')) {
+      polls.push(target)
+      if (polls.length === 1) {
+        return {
+          ok: true,
+          status: 200,
+          headers: { get: () => 'application/json' },
+          text: async () =>
+            JSON.stringify({
+              success: true,
+              cursor: 'c1',
+              timed_out: false,
+              messages: [
+                {
+                  id: 'msg-1',
+                  thread_id: 'thread-1',
+                  from_address: 'sender@example.com',
+                  from_name: 'Sender',
+                  subject: 'Hello',
+                  snippet: 'hi',
+                  received_at: 1_760_000_000,
+                  direction: 'inbound',
+                  folder: 'inbox',
+                },
+              ],
+            }),
+        }
+      }
+      // Later polls report nothing new and time out, like Mailly does.
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => 'application/json' },
+        text: async () => JSON.stringify({ success: true, messages: [], cursor: 'c1', timed_out: true }),
+      }
+    }
+    return upstreamFetch(url, options)
+  }
+  const wired = createHarness({
+    services: {
+      sessionController: {
+        async create() {
+          const sessionId = `s${sessions.created.length + 1}`
+          sessions.created.push({ sessionId })
+          return { sessionId }
+        },
+        async prompt(request) {
+          sessions.prompts.push(request)
+          return { accepted: true }
+        },
+      },
+    },
+  })
+  try {
+    const enabled = await send(wired.handler, {
+      method: 'PUT',
+      url: '/mailly-api/automation',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    })
+    assert.equal(enabled.status, 200)
+    assert.equal(enabled.body.enabled, true)
+    assert.equal(enabled.body.running, true)
+
+    // The loop yields between polls; wait for the first message to be handled.
+    for (let attempt = 0; attempt < 100 && sessions.prompts.length === 0; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20))
+    }
+    assert.equal(sessions.created.length, 1)
+    assert.equal(sessions.prompts.length, 1)
+    assert.equal(sessions.prompts[0].sessionId, 's1')
+    assert.equal(sessions.prompts[0].mode, 'queue')
+    assert.match(sessions.prompts[0].content[0].text, /thread-1/)
+    assert.match(sessions.prompts[0].content[0].text, /mailly_inbox_save_draft/)
+    assert.match(sessions.prompts[0].content[0].text, /never send|Do not send/i)
+
+    const status = await send(wired.handler, { url: '/mailly-api/automation' })
+    assert.equal(status.body.threadCount, 1)
+    assert.equal(status.body.cursor, 'c1')
+  } finally {
+    await send(wired.handler, {
+      method: 'PUT',
+      url: '/mailly-api/automation',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+    wired.dispose()
+    globalThis.fetch = upstreamFetch
+  }
+})
