@@ -100,14 +100,19 @@ globalThis.fetch = async (url, options = {}) => {
 // ---------------------------------------------------------------------------
 // Harness
 
-function createHarness() {
+function createHarness({ routeError } = {}) {
   const routes = []
   const tools = []
+  const disposers = []
   apply({
     webServer: {
       register(route) {
+        if (routeError) throw routeError
         routes.push(route)
-        return () => {}
+        return () => {
+          const index = routes.indexOf(route)
+          if (index !== -1) routes.splice(index, 1)
+        }
       },
     },
     tools: {
@@ -116,11 +121,20 @@ function createHarness() {
         return () => {}
       },
     },
-    on() {
+    effect(create) {
+      const dispose = create()
+      if (typeof dispose === 'function') disposers.push(dispose)
       return () => {}
     },
   })
-  return { routes, tools, handler: routes[0].handler }
+  return {
+    routes,
+    tools,
+    handler: routes[0] && routes[0].handler,
+    dispose() {
+      while (disposers.length) disposers.pop()()
+    },
+  }
 }
 
 function send(handler, options = {}) {
@@ -166,6 +180,46 @@ test('registers one prefix route and the three inbox tools', () => {
     assert.equal(typeof tool.execute, 'function')
     assert.equal(typeof tool.output.render, 'function')
   }
+})
+
+test('ownership of the route is an effect, so unloading releases it', () => {
+  const first = createHarness()
+  assert.equal(first.routes.length, 1)
+  first.dispose()
+  assert.equal(first.routes.length, 0)
+  // A fresh activation after disposal must not hit a duplicate route.
+  const second = createHarness()
+  assert.equal(second.routes.length, 1)
+})
+
+test('a stale activation owning the route keeps the model tools available', () => {
+  const warnings = []
+  const originalWarn = console.warn
+  console.warn = (...args) => warnings.push(args.join(' '))
+  try {
+    const stale = createHarness({ routeError: new Error('webserver: duplicate prefix route "/mailly-api"') })
+    assert.equal(stale.routes.length, 0)
+    assert.equal(stale.tools.length, 3)
+    assert.match(warnings.join('\n'), /previous activation/)
+  } finally {
+    console.warn = originalWarn
+  }
+})
+
+test('an unrelated route error still fails the activation', () => {
+  assert.throws(
+    () => createHarness({ routeError: new Error('webserver: duplicate prefix route "/other"') }),
+    /duplicate prefix route "\/other"/,
+  )
+})
+
+test('every tool declares a string result that matches the rendered text', async () => {
+  const tool = harness.tools.find((entry) => entry.name === 'mailly_inbox_list_threads')
+  assert.deepEqual(tool.output.schema, { type: 'string' })
+  const value = await tool.execute({}, { signal: new AbortController().signal })
+  assert.equal(typeof value, 'string')
+  assert.deepEqual(tool.output.render({}, value), [{ type: 'text', text: value }])
+  for (const entry of harness.tools) assert.deepEqual(entry.output.schema, { type: 'string' })
 })
 
 test('status reports the environment credential', async () => {

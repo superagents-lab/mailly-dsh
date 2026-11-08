@@ -21,6 +21,11 @@ import { dirname, join } from 'node:path'
 export const inject = ['webServer', 'tools']
 
 const ROUTE = '/mailly-api'
+// The web server refuses a second route for one path. The only realistic way
+// this plugin sees that error is a previous activation of itself whose route
+// was never disposed in this process (older builds registered cleanup with
+// `ctx.on('dispose')`, which is not a teardown hook in Cordis 4). See apply().
+const STALE_ROUTE_ERROR = /^webserver: duplicate (?:exact|prefix) route "\/mailly-api"$/
 const DEFAULT_BASE = 'https://api.mailly.site'
 const KEY_ENV = 'MAILLY_API_KEY'
 const BODY_LIMIT = 2 * 1024 * 1024
@@ -308,7 +313,10 @@ function idempotencyKey(anchorEmailId, text, replyAll) {
 
 function textOutput() {
   return {
-    schema: { type: 'object', properties: {}, additionalProperties: true },
+    // Every tool below resolves to one plain-text string. The executor
+    // validates the returned value against this schema, so it must say
+    // `string`; an object schema would reject every successful call.
+    schema: { type: 'string' },
     render: (_args, value) => [
       { type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value, null, 2) },
     ],
@@ -316,9 +324,10 @@ function textOutput() {
 }
 
 function registerTools(ctx) {
-  const disposers = []
+  // `ctx.tools.register` is effect-scoped to this plugin fiber, so the tools
+  // disappear with the plugin; no manual teardown is needed.
   const register = (definition) => {
-    disposers.push(ctx.tools.register(definition))
+    ctx.tools.register(definition)
   }
 
   register({
@@ -421,16 +430,6 @@ function registerTools(ctx) {
       if (draft.review_url) lines.push(`review_url: ${draft.review_url}`)
       return lines.join('\n')
     },
-  })
-
-  ctx.on('dispose', () => {
-    for (const dispose of disposers.splice(0)) {
-      try {
-        dispose()
-      } catch {
-        // Already removed.
-      }
-    }
   })
 }
 
@@ -622,8 +621,23 @@ function createRouteHandler() {
   }
 }
 
+function isStaleRouteError(error) {
+  return error instanceof Error && STALE_ROUTE_ERROR.test(error.message)
+}
+
 export function apply(ctx) {
-  const disposeRoute = ctx.webServer.register({ kind: 'prefix', path: ROUTE, handler: createRouteHandler() })
-  ctx.on('dispose', disposeRoute)
+  let disposeRoute
+  try {
+    disposeRoute = ctx.webServer.register({ kind: 'prefix', path: ROUTE, handler: createRouteHandler() })
+  } catch (error) {
+    // A previous in-process activation can still own the route because its
+    // cleanup never ran. Failing here would also lose the model tools, so keep
+    // them and warn instead; the page route recovers on the next DSH restart.
+    if (!isStaleRouteError(error)) throw error
+    console.warn(
+      `mailly: ${ROUTE} is already owned by a previous activation of this plugin; keeping the model tools available until DeepSeek Harness restarts.`,
+    )
+  }
+  if (disposeRoute) ctx.effect(() => disposeRoute, 'mailly: /mailly-api routes')
   registerTools(ctx)
 }
