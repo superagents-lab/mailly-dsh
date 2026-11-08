@@ -1,0 +1,6 @@
+# Mailly workbench: one Host plugin row (REST proxy + model tools) and one
+# Client module (the inbox page). The Client half is discovered from the same
+# package through `dsh.client` in package.json.
+- insert:
+    - id: mailly-workbench
+      name: '@mailly/dsh'
