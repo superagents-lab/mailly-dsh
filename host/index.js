@@ -9,14 +9,22 @@
  *
  * Credential resolution, first hit wins:
  *   1. `MAILLY_API_KEY` in the Harness process environment.
- *   2. `$DSH_HOME/mailly/api-key`, written by the workbench setup card.
+ *   2. `$DSH_HOME/mailly/auth.json` — the device credential from "Sign in with
+ *      Mailly" (`{ version, apiKey, email, obtainedAt, method: 'device' }`).
+ *   3. `$DSH_HOME/mailly/api-key`, the legacy key written by the setup card.
+ *
+ * The API key never leaves this file: no route below returns it, and the only
+ * model tools are the three read/draft tools (nothing can send).
  *
  * Endpoint override: `MAILLY_API_URL` (default `https://api.mailly.site`).
  */
 
-import { chmod, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { randomBytes, randomUUID } from 'node:crypto'
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+
+import { createPoller, createStateStore, describeAutomation } from './automation.js'
 
 export const inject = ['webServer', 'tools']
 
@@ -32,6 +40,19 @@ const BODY_LIMIT = 2 * 1024 * 1024
 const REQUEST_TIMEOUT_MS = 60_000
 const MAX_MESSAGES = 30
 
+// Device sign-in ("Sign in with Mailly"): Mailly CLI device authorization.
+const MAILLY_WEB = 'https://mailly.site'
+const DEVICE_TOKEN_BYTES = 32
+const DEVICE_TTL_MS = 5 * 60 * 1000
+const DEVICE_DEFAULT_INTERVAL = 2
+const DEVICE_DEFAULT_EXPIRES_IN = 300
+const STATUS_PROBE_TIMEOUT_MS = 2_000
+
+// Workbench send: ids are opaque Mailly ids. Accept only a conservative
+// character set so a crafted id can never change the upstream path.
+const DRAFT_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/
+const REVISION_PATTERN = /^[1-9][0-9]{0,8}$/
+
 // ---------------------------------------------------------------------------
 // Credential storage
 
@@ -43,20 +64,59 @@ function keyPath() {
   return join(dshHome(), 'mailly', 'api-key')
 }
 
+function authPath() {
+  return join(dshHome(), 'mailly', 'auth.json')
+}
+
 function apiBase() {
   return (process.env.MAILLY_API_URL || DEFAULT_BASE).replace(/\/+$/, '')
 }
 
+/** The device credential, or null when absent, unreadable or malformed. */
+async function readDeviceAuth() {
+  let raw
+  try {
+    raw = await readFile(authPath(), 'utf8')
+  } catch {
+    return null
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    if (parsed.version !== 1) return null
+    if (typeof parsed.apiKey !== 'string' || !parsed.apiKey.trim()) return null
+    return {
+      apiKey: parsed.apiKey.trim(),
+      email: typeof parsed.email === 'string' ? parsed.email : '',
+      obtainedAt: Number.isFinite(parsed.obtainedAt) ? parsed.obtainedAt : null,
+    }
+  } catch {
+    // A corrupt file must never break the plugin; the legacy key still works.
+    return null
+  }
+}
+
 async function resolveKey() {
   const fromEnv = (process.env[KEY_ENV] || '').trim()
-  if (fromEnv) return { key: fromEnv, source: 'env' }
+  if (fromEnv) return { key: fromEnv, source: 'env', email: '' }
+  const device = await readDeviceAuth()
+  if (device) return { key: device.apiKey, source: 'device', email: device.email }
   try {
     const stored = (await readFile(keyPath(), 'utf8')).trim()
-    if (stored) return { key: stored, source: 'file' }
+    if (stored) return { key: stored, source: 'file', email: '' }
   } catch {
     // No stored key yet.
   }
-  return { key: '', source: 'none' }
+  return { key: '', source: 'none', email: '' }
+}
+
+async function exists(file) {
+  try {
+    await stat(file)
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function storeKey(apiKey) {
@@ -64,6 +124,36 @@ async function storeKey(apiKey) {
   await mkdir(dirname(file), { recursive: true, mode: 0o700 })
   await writeFile(file, `${apiKey}\n`, { mode: 0o600 })
   await chmod(file, 0o600)
+}
+
+/** Persist a device credential. The value is never logged or returned. */
+async function storeDeviceAuth({ apiKey, email }) {
+  const file = authPath()
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 })
+  const record = {
+    version: 1,
+    apiKey,
+    email,
+    obtainedAt: Math.floor(Date.now() / 1000),
+    method: 'device',
+  }
+  await writeFile(file, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600 })
+  await chmod(file, 0o600)
+  return record
+}
+
+// ---------------------------------------------------------------------------
+// Device sign-in state (memory only: one pending flow per Host)
+
+/** @type {{ deviceToken: string, interval: number, expiresIn: number, startedAt: number } | null} */
+let pendingDevice = null
+
+function deviceFlowExpired(flow, now = Date.now()) {
+  return !flow || now - flow.startedAt > DEVICE_TTL_MS
+}
+
+function clearPendingDevice() {
+  pendingDevice = null
 }
 
 // ---------------------------------------------------------------------------
@@ -101,9 +191,40 @@ async function callApi(options) {
   }
   if (!response.ok || (data && data.success === false && response.status !== 207)) {
     const reason = data && typeof data.error === 'string' ? data.error : `HTTP ${response.status}`
-    throw new Error(`Mailly API ${method} ${path} failed: ${reason}`)
+    const error = new Error(`Mailly API ${method} ${path} failed: ${reason}`)
+    error.status = response.status
+    error.data = data
+    throw error
   }
   return data
+}
+
+/**
+ * One call to an unauthenticated Mailly endpoint (`/cli/auth/*`). Returns the
+ * status and parsed body instead of throwing: the device flow treats 202/410
+ * as normal answers and the caller maps everything else.
+ */
+async function callPublicApi(path, body, signal) {
+  const response = await fetch(`${apiBase()}${path}`, {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    signal: requestSignal(signal),
+  })
+  const text = await response.text()
+  let data
+  try {
+    data = text ? JSON.parse(text) : {}
+  } catch {
+    data = { text }
+  }
+  return { status: response.status, ok: response.ok, data }
+}
+
+function isUnreachable(error) {
+  // fetch() rejects with a TypeError (or an AbortError on timeout) when the
+  // host cannot be reached; an HTTP failure is an Error carrying `status`.
+  return !(error instanceof Error) || error.status === undefined
 }
 
 async function requireKey() {
@@ -481,16 +602,397 @@ async function readJson(req) {
   return text ? JSON.parse(text) : {}
 }
 
+// ---------------------------------------------------------------------------
+// /status (best-effort account probe)
+
+/** GET /me, bounded by a short timeout so /status stays fast. Null on any failure. */
+async function probeAccount(key) {
+  const timeout = AbortSignal.timeout(STATUS_PROBE_TIMEOUT_MS)
+  try {
+    const data = await callApi({ path: '/me', key, signal: timeout })
+    return {
+      email: typeof data?.email === 'string' ? data.email : null,
+      credentialType: typeof data?.credential_type === 'string' ? data.credential_type : null,
+      scopes: Array.isArray(data?.scopes) ? data.scopes.filter((scope) => typeof scope === 'string') : [],
+    }
+  } catch {
+    return null
+  }
+}
+
+async function statusPayload() {
+  const { key, source, email } = await resolveKey()
+  const account = key ? await probeAccount(key) : null
+  return {
+    configured: Boolean(key),
+    source,
+    apiBaseUrl: apiBase(),
+    keyEnv: KEY_ENV,
+    keyFile: keyPath(),
+    email: source === 'device' ? email || account?.email || null : null,
+    account,
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Device sign-in routes
+
+async function startDeviceFlow(res) {
+  const deviceToken = randomBytes(DEVICE_TOKEN_BYTES).toString('hex')
+  let answer
+  try {
+    answer = await callPublicApi('/cli/auth/init', { deviceToken })
+  } catch {
+    clearPendingDevice()
+    send(res, 503, { error: 'mailly_unreachable' })
+    return
+  }
+  if (!answer.ok) {
+    clearPendingDevice()
+    const reason = typeof answer.data?.error === 'string' ? answer.data.error : `HTTP ${answer.status}`
+    send(res, 502, { error: 'device_start_failed', detail: reason })
+    return
+  }
+  const expiresIn = Number.isFinite(answer.data?.expiresIn) ? answer.data.expiresIn : DEVICE_DEFAULT_EXPIRES_IN
+  const interval = Number.isFinite(answer.data?.interval) ? answer.data.interval : DEVICE_DEFAULT_INTERVAL
+  // Single pending flow: starting a new one replaces the previous one.
+  pendingDevice = { deviceToken, interval, expiresIn, startedAt: Date.now() }
+  send(res, 200, {
+    deviceToken,
+    verificationUrl: `${MAILLY_WEB}/cli-auth?token=${deviceToken}`,
+    expiresIn,
+    interval,
+  })
+}
+
+async function pollDeviceFlow(res) {
+  const flow = pendingDevice
+  if (!flow || deviceFlowExpired(flow)) {
+    clearPendingDevice()
+    send(res, 404, { error: 'no_pending_flow' })
+    return
+  }
+  let answer
+  try {
+    answer = await callPublicApi('/cli/auth/poll', { deviceToken: flow.deviceToken })
+  } catch {
+    // Keep the flow: the user may retry the poll.
+    send(res, 503, { error: 'mailly_unreachable' })
+    return
+  }
+  if (answer.status === 202) {
+    send(res, 200, { status: 'pending' })
+    return
+  }
+  if (answer.status === 410) {
+    clearPendingDevice()
+    send(res, 200, { status: 'expired' })
+    return
+  }
+  if (answer.status === 200) {
+    const apiKey = typeof answer.data?.apiKey === 'string' ? answer.data.apiKey.trim() : ''
+    const email = typeof answer.data?.email === 'string' ? answer.data.email : ''
+    if (!apiKey) {
+      clearPendingDevice()
+      send(res, 502, { error: 'device_approved_without_key' })
+      return
+    }
+    // Verify before persisting; Mailly's one-time claim is already spent, so a
+    // failure here is reported and the flow is dropped rather than stored.
+    let verified = true
+    try {
+      await callApi({ path: '/me', key: apiKey })
+    } catch (error) {
+      if (isUnreachable(error) || error.status === 404) {
+        try {
+          await callApi({ path: '/balance', key: apiKey })
+        } catch {
+          verified = false
+        }
+      } else {
+        verified = false
+      }
+    }
+    clearPendingDevice()
+    if (!verified) {
+      send(res, 502, { error: 'invalid_key' })
+      return
+    }
+    await storeDeviceAuth({ apiKey, email })
+    send(res, 200, { status: 'approved', email })
+    return
+  }
+  // Any other answer (400/409/5xx) ends this flow; the user starts over.
+  clearPendingDevice()
+  const reason = typeof answer.data?.error === 'string' ? answer.data.error : `HTTP ${answer.status}`
+  send(res, 502, { error: 'device_poll_failed', detail: reason })
+}
+
+// ---------------------------------------------------------------------------
+// Workbench send routes (human-only; no model tool can reach them)
+
+function revisionOf(value) {
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value
+  if (typeof value === 'string' && REVISION_PATTERN.test(value)) return Number(value)
+  return null
+}
+
+/** Mailly draft lookup by id: GET /mail-drafts?thread_id= is the only list route. */
+async function findDraft(draftId, key) {
+  const threadIds = []
+  const threads = await callApi({ path: '/inbox/threads?limit=50', key })
+  for (const thread of Array.isArray(threads?.threads) ? threads.threads : []) {
+    if (thread?.thread_id) threadIds.push(thread.thread_id)
+  }
+  for (const threadId of threadIds) {
+    const listed = await callApi({ path: `/mail-drafts?thread_id=${encodeURIComponent(threadId)}`, key })
+    const drafts = Array.isArray(listed?.drafts) ? listed.drafts : []
+    const match = drafts.find((draft) => String(draft?.id) === draftId)
+    if (match) return match
+  }
+  return null
+}
+
+function mapSendFailure(error) {
+  const status = error?.status
+  if (status === 409) return { status: 409, error: 'draft_changed' }
+  if (status === 403) return { status: 403, error: 'send_forbidden' }
+  if (status === 402) return { status: 402, error: 'no_balance' }
+  if (status === 429) return { status: 429, error: 'rate_limited' }
+  // 503 unconfirmed and anything we cannot classify: the same revision/text
+  // retry is safe on Mailly's side.
+  return { status: 503, error: 'unconfirmed' }
+}
+
+async function approveDraft(req, res, draftId, key) {
+  let body
+  try {
+    body = await readJson(req)
+  } catch {
+    send(res, 400, { error: 'Expected a JSON body' })
+    return
+  }
+  const revision = revisionOf(body?.revision)
+  const text = typeof body?.text === 'string' ? body.text : ''
+  if (revision === null) {
+    send(res, 400, { error: 'revision is required' })
+    return
+  }
+  if (!text) {
+    send(res, 400, { error: 'text is required' })
+    return
+  }
+
+  let current
+  try {
+    current = await findDraft(draftId, key)
+  } catch (error) {
+    const mapped = mapSendFailure(error)
+    send(res, mapped.status, { error: mapped.error })
+    return
+  }
+  if (!current) {
+    send(res, 404, { error: 'draft_not_found' })
+    return
+  }
+  // Refuse anything but the exact version a human just reviewed.
+  if (
+    current.status !== 'pending' ||
+    Number(current.revision) !== revision ||
+    typeof current.text !== 'string' ||
+    current.text !== text
+  ) {
+    send(res, 409, { error: 'draft_changed' })
+    return
+  }
+
+  let approved
+  try {
+    approved = await callApi({
+      method: 'POST',
+      path: `/mail-drafts/${draftId}/approve`,
+      key,
+      body: { revision, text },
+    })
+  } catch (error) {
+    const mapped = mapSendFailure(error)
+    send(res, mapped.status, { error: mapped.error })
+    return
+  }
+  send(res, 200, { ok: true, draft: shapeDraft(approved?.draft || {}) })
+}
+
+async function discardDraft(req, res, draftId, key) {
+  let body
+  try {
+    body = await readJson(req)
+  } catch {
+    send(res, 400, { error: 'Expected a JSON body' })
+    return
+  }
+  const revision = revisionOf(body?.revision)
+  if (revision === null) {
+    send(res, 400, { error: 'revision is required' })
+    return
+  }
+  try {
+    await callApi({ method: 'POST', path: `/mail-drafts/${draftId}/discard`, key, body: { revision } })
+  } catch (error) {
+    const mapped = mapSendFailure(error)
+    send(res, mapped.status, { error: mapped.error })
+    return
+  }
+  send(res, 200, { ok: true })
+}
+
+// ---------------------------------------------------------------------------
+// Inbound automation: a new email starts (or continues) one DSH session per
+// thread. Off by default; the state file lives beside the credentials.
+
+let automation = null
+
+function automationStatePath() {
+  return join(dshHome(), 'mailly', 'automation.json')
+}
+
+function automationStore() {
+  return createStateStore({ file: automationStatePath() })
+}
+
+/** `sessionController` is optional: without it the feature stays off. */
+function automationServices(ctx) {
+  const sessionController = ctx.get('sessionController')
+  if (!sessionController) return null
+  return {
+    createSession: async () => {
+      const created = await sessionController.create({ agentPreset: 'standard' })
+      return { sessionId: created.sessionId }
+    },
+    promptSession: ({ sessionId, text }) =>
+      sessionController.prompt({
+        requestId: randomUUID(),
+        sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text }],
+      }),
+  }
+}
+
+/**
+ * Start the poll loop when the stored state says it is enabled. The poller
+ * re-reads the credential on every poll, so connecting Mailly later starts it
+ * working without a restart.
+ */
+function startInboundAutomation(ctx) {
+  const services = automationServices(ctx)
+  if (!services) return
+  const store = automationStore()
+  const poller = createPoller({
+    store,
+    base: apiBase(),
+    key: async () => (await resolveKey()).key,
+    ...services,
+    onEvent: (event) => {
+      if (event.type === 'poll_error') console.warn(`mailly: inbound poll failed: ${event.error}`)
+      if (event.type === 'session') {
+        console.log(`mailly: started ${event.kind} session ${event.sessionId} for thread ${event.threadId}`)
+      }
+    },
+  })
+  automation = { store, poller }
+  ctx.effect(() => {
+    let running = null
+    store
+      .load()
+      .then((state) => {
+        if (!state.enabled) return
+        running = poller.start()
+      })
+      .catch((error) => {
+        console.warn(`mailly: inbound automation stays off: ${messageOf(error)}`)
+      })
+    return () => {
+      automation = null
+      void poller.stop().then(() => running)
+    }
+  }, 'mailly: inbound automation')
+}
+
+/** Make the live poller follow the stored `enabled` flag. */
+async function applyAutomationEnabled(enabled) {
+  const store = automationStore()
+  const state = await store.load()
+  state.enabled = enabled
+  await store.save(state)
+  if (!automation) return state
+  if (enabled) {
+    if (automation.poller.getState() === null) automation.poller.start()
+  } else {
+    await automation.poller.stop()
+  }
+  return state
+}
+
+async function automationStatus() {
+  const store = automationStore()
+  const state = await store.load()
+  return {
+    ...describeAutomation(state),
+    available: Boolean(automation),
+    running: Boolean(automation && automation.poller.getState() !== null),
+  }
+}
+
 async function handle(req, res, path, method, url) {
   if (method === 'GET' && path === '/status') {
-    const { key, source } = await resolveKey()
-    send(res, 200, {
-      configured: Boolean(key),
-      source,
-      apiBaseUrl: apiBase(),
-      keyEnv: KEY_ENV,
-      keyFile: keyPath(),
-    })
+    send(res, 200, await statusPayload())
+    return
+  }
+
+  if (method === 'GET' && path === '/automation') {
+    send(res, 200, await automationStatus())
+    return
+  }
+
+  if ((method === 'PUT' || method === 'POST') && path === '/automation') {
+    let body
+    try {
+      body = await readJson(req)
+    } catch {
+      send(res, 400, { error: 'Expected a JSON body' })
+      return
+    }
+    if (typeof body?.enabled !== 'boolean') {
+      send(res, 400, { error: 'enabled must be a boolean' })
+      return
+    }
+    if (body.enabled && !automation) {
+      send(res, 409, { error: 'automation_unavailable' })
+      return
+    }
+    try {
+      await applyAutomationEnabled(body.enabled)
+    } catch (error) {
+      send(res, 500, { error: messageOf(error) })
+      return
+    }
+    send(res, 200, await automationStatus())
+    return
+  }
+
+  if (method === 'POST' && path === '/auth/device/start') {
+    await startDeviceFlow(res)
+    return
+  }
+
+  if (method === 'POST' && path === '/auth/device/poll') {
+    await pollDeviceFlow(res)
+    return
+  }
+
+  if (method === 'POST' && path === '/auth/device/cancel') {
+    clearPendingDevice()
+    send(res, 200, { ok: true })
     return
   }
 
@@ -519,8 +1021,34 @@ async function handle(req, res, path, method, url) {
   }
 
   if (method === 'DELETE' && path === '/key') {
-    await rm(keyPath(), { force: true })
-    send(res, 200, { ok: true })
+    const cleared = []
+    for (const [label, file] of [['file', keyPath()], ['device', authPath()]]) {
+      if (await exists(file)) cleared.push(label)
+      try {
+        await rm(file, { force: true })
+      } catch {
+        // Best effort; a leftover file still cannot win over env.
+      }
+    }
+    clearPendingDevice()
+    send(res, 200, { ok: true, cleared })
+    return
+  }
+
+  const draftRoute = /^\/drafts\/([^/]+)\/(approve|discard)$/.exec(path)
+  if (method === 'POST' && draftRoute) {
+    const draftId = draftRoute[1]
+    if (!DRAFT_ID_PATTERN.test(draftId)) {
+      send(res, 400, { error: 'invalid_draft_id' })
+      return
+    }
+    const { key } = await resolveKey()
+    if (!key) {
+      send(res, 401, { error: 'missing_key', keyEnv: KEY_ENV, keyFile: keyPath() })
+      return
+    }
+    if (draftRoute[2] === 'approve') await approveDraft(req, res, draftId, key)
+    else await discardDraft(req, res, draftId, key)
     return
   }
 
@@ -640,4 +1168,5 @@ export function apply(ctx) {
   }
   if (disposeRoute) ctx.effect(() => disposeRoute, 'mailly: /mailly-api routes')
   registerTools(ctx)
+  startInboundAutomation(ctx)
 }

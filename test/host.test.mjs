@@ -100,11 +100,14 @@ globalThis.fetch = async (url, options = {}) => {
 // ---------------------------------------------------------------------------
 // Harness
 
-function createHarness({ routeError } = {}) {
+function createHarness({ routeError, services = {} } = {}) {
   const routes = []
   const tools = []
   const disposers = []
   apply({
+    get(name) {
+      return services[name]
+    },
     webServer: {
       register(route) {
         if (routeError) throw routeError
@@ -341,5 +344,77 @@ test('a rejected key surfaces as a readable failure', async () => {
     await assert.rejects(() => tool.execute({}, { signal: new AbortController().signal }), /invalid token/)
   } finally {
     globalThis.fetch = realFetch
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Inbound automation routes
+
+test('automation is off by default and unavailable without a session service', async () => {
+  const plain = createHarness()
+  const status = await send(plain.handler, { url: '/mailly-api/automation' })
+  assert.equal(status.status, 200)
+  assert.equal(status.body.enabled, false)
+  assert.equal(status.body.available, false)
+  assert.equal(status.body.running, false)
+
+  const refused = await send(plain.handler, {
+    method: 'PUT',
+    url: '/mailly-api/automation',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ enabled: true }),
+  })
+  assert.equal(refused.status, 409)
+  assert.equal(refused.body.error, 'automation_unavailable')
+})
+
+test('automation requires a boolean and reports the stored state once enabled', async () => {
+  const sessions = { created: 0, prompts: [] }
+  const wired = createHarness({
+    services: {
+      sessionController: {
+        async create() {
+          sessions.created += 1
+          return { sessionId: `s-${sessions.created}` }
+        },
+        async prompt(request) {
+          sessions.prompts.push(request)
+          return { accepted: true }
+        },
+      },
+    },
+  })
+  try {
+    const bad = await send(wired.handler, {
+      method: 'PUT',
+      url: '/mailly-api/automation',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: 'yes' }),
+    })
+    assert.equal(bad.status, 400)
+
+    const status = await send(wired.handler, { url: '/mailly-api/automation' })
+    assert.equal(status.body.available, true)
+    assert.equal(status.body.enabled, false)
+
+    const enabled = await send(wired.handler, {
+      method: 'PUT',
+      url: '/mailly-api/automation',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    })
+    assert.equal(enabled.status, 200)
+    assert.equal(enabled.body.enabled, true)
+
+    const off = await send(wired.handler, {
+      method: 'PUT',
+      url: '/mailly-api/automation',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+    assert.equal(off.status, 200)
+    assert.equal(off.body.enabled, false)
+  } finally {
+    wired.dispose()
   }
 })
