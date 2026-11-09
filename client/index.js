@@ -543,6 +543,7 @@ window.__ModuleLoader__.load({
       },
       buildMailPrompt,
       anchorMessageOf,
+      sidebarBody: MaillySidebarBody,
       dictionaryFor,
       draftMatches,
       findDraft,

@@ -1398,3 +1398,167 @@ test('the plugin still works when the right sidebar is absent', () => {
     false,
   )
 })
+
+test('the sidebar tab lists conversations and drills into one', async () => {
+  const dict = plugin.testHelpers.dictionaryFor('zh')
+  const t = (key) => (typeof dict[key] === 'string' ? dict[key] : key)
+  globalThis.fetch = async (url) => {
+    const path = String(url)
+    if (path.endsWith('/status')) return ok({ ...STATUS_FILE, source: 'device', email: 'wang@example.com' })
+    if (path.includes('/threads?')) return ok(THREADS_PAYLOAD)
+    if (path.includes('/thread?id=')) return ok(threadPayload())
+    return fail(404, `unexpected ${path}`)
+  }
+
+  const { sidebarBody } = plugin.testHelpers
+  const props = {
+    translate: t,
+    getLocale: () => 'zh',
+    sessionId: 'session-1',
+    inputActions: { insertQuote: () => true },
+  }
+  resetHooks()
+  const renderOnce = () => {
+    hookIndex = 0
+    const tree = sidebarBody(props)
+    for (const effect of effects) {
+      if (effect && effect.run) {
+        effect.run = false
+        effect.fn()
+      }
+    }
+    return tree
+  }
+  const settle = async (passes = 14) => {
+    let tree
+    for (let pass = 0; pass < passes; pass += 1) {
+      tree = renderOnce()
+      await new Promise((resolve) => setTimeout(resolve, 2))
+    }
+    return tree
+  }
+
+  const walk = (node, out = []) => {
+    if (node === null || node === undefined || typeof node !== 'object') return out
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, out)
+      return out
+    }
+    out.push(node)
+    for (const child of node.children || []) walk(child, out)
+    return out
+  }
+  const byClass = (tree, className) =>
+    walk(tree).filter(
+      (node) => node.props && typeof node.props.className === 'string' && node.props.className.split(' ').includes(className),
+    )
+  const textOf = (node) => {
+    if (node === null || node === undefined) return ''
+    if (typeof node === 'string' || typeof node === 'number') return String(node)
+    if (Array.isArray(node)) return node.map(textOf).join('')
+    return (node.children || []).map(textOf).join('')
+  }
+
+  let tree = await settle()
+  // The list: one row with sender, subject and snippet, and an unread marker.
+  assert.equal(byClass(tree, 'ml-sb-row').length, 1)
+  assert.equal(byClass(tree, 'ml-sb-row-unread').length, 1)
+  assert.match(textOf(tree), /林薇/)
+  assert.match(textOf(tree), /预算确认/)
+  assert.equal(byClass(tree, 'ml-sb-avatar').length, 1, 'the row carries an avatar')
+
+  // Drill in: the same column becomes the reader.
+  byClass(tree, 'ml-sb-row')[0].props.onClick()
+  tree = await settle()
+  assert.equal(byClass(tree, 'ml-sb-reader').length, 1)
+  assert.equal(byClass(tree, 'ml-sb-row').length, 0, 'the list is replaced, not split')
+  assert.equal(byClass(tree, 'ml-sb-msg').length, 2)
+  assert.match(textOf(tree), /第二封正文/)
+
+  // Back returns to the list.
+  byClass(tree, 'ml-sb-back')[0].props.onClick()
+  tree = await settle()
+  assert.equal(byClass(tree, 'ml-sb-row').length, 1)
+  assert.equal(byClass(tree, 'ml-sb-reader').length, 0)
+})
+
+test('the sidebar hand-off inserts the prompt instead of sending it', async () => {
+  const dict = plugin.testHelpers.dictionaryFor('zh')
+  const t = (key) => (typeof dict[key] === 'string' ? dict[key] : key)
+  const calls = []
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url)
+    calls.push({ path, options })
+    if (path.endsWith('/status')) return ok({ ...STATUS_FILE, source: 'device', email: 'wang@example.com' })
+    if (path.includes('/threads?')) return ok(THREADS_PAYLOAD)
+    if (path.includes('/thread?id=')) return ok(threadPayload())
+    return fail(404, `unexpected ${path}`)
+  }
+  const inserted = []
+  const { sidebarBody } = plugin.testHelpers
+  const props = {
+    translate: t,
+    getLocale: () => 'zh',
+    sessionId: 'session-1',
+    inputActions: {
+      insertQuote: (text) => {
+        inserted.push(text)
+        return true
+      },
+    },
+  }
+  resetHooks()
+  const renderOnce = () => {
+    hookIndex = 0
+    const tree = sidebarBody(props)
+    for (const effect of effects) {
+      if (effect && effect.run) {
+        effect.run = false
+        effect.fn()
+      }
+    }
+    return tree
+  }
+  const settle = async (passes = 14) => {
+    let tree
+    for (let pass = 0; pass < passes; pass += 1) {
+      tree = renderOnce()
+      await new Promise((resolve) => setTimeout(resolve, 2))
+    }
+    return tree
+  }
+  const walk = (node, out = []) => {
+    if (node === null || node === undefined || typeof node !== 'object') return out
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, out)
+      return out
+    }
+    out.push(node)
+    for (const child of node.children || []) walk(child, out)
+    return out
+  }
+  const textOf = (node) => {
+    if (node === null || node === undefined) return ''
+    if (typeof node === 'string' || typeof node === 'number') return String(node)
+    if (Array.isArray(node)) return node.map(textOf).join('')
+    return (node.children || []).map(textOf).join('')
+  }
+  const buttonByText = (tree, label) =>
+    walk(tree).find((node) => node.type === 'button' && textOf(node).includes(label))
+
+  let tree = await settle()
+  walk(tree)
+    .find((node) => node.props && String(node.props.className || '').includes('ml-sb-row'))
+    .props.onClick()
+  tree = await settle()
+
+  buttonByText(tree, '交给 agent').props.onClick()
+  tree = await settle(6)
+
+  assert.equal(inserted.length, 1, 'the prompt went into the composer')
+  assert.match(inserted[0], /thread_id: t1/)
+  assert.match(inserted[0], /第二封正文/)
+  // Nothing was queued or sent.
+  assert.equal(calls.filter((call) => call.path.includes('/agent/prompt')).length, 0)
+  assert.match(textOf(tree), /已插入输入框/)
+})
