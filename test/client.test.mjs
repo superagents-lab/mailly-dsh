@@ -1031,9 +1031,7 @@ test('a reloaded bundle hands its code to the page already running it', () => {
     on: () => () => {},
   })
   assert.equal(registrations.length, before, 'the page is not registered a second time')
-  // The reloaded code replaces the previous registrations: the old ones are
-  // disposed first, then the same two slots are registered again.
-  // The first instance never registered through this context, so there is
-  // nothing to dispose; the reloaded code registers the two slots once.
+  // The reloaded code re-registers the same two slots and disposes nothing,
+  // so a reload can never leave the page without its entry.
   assert.deepEqual(calls, ['register', 'register'])
 })

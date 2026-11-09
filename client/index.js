@@ -1927,15 +1927,13 @@ window.__ModuleLoader__.load({
         // first instance already owns the slots, so hand the newest code to it
         // rather than registering the page twice.
         if (runtime.apply && runtime.apply !== pluginApply) {
-          // A reloaded bundle: re-register the page with this module's code.
-          // Running both instances would make the second one's slot disposers
-          // remove the first one's registrations, so only this one runs.
-          runtime.apply = pluginApply
-          try {
-            runtime.cleanup?.()
-          } catch {
-            // The previous instance's registrations are already gone.
-          }
+          // A reloaded bundle: the page keeps the first module instance, so
+          // hand the newest registration to it. Running both instances would
+          // make the second one's slot disposers remove the first one's
+          // registrations, and disposing the first one's would leave the page
+          // with no entry at all.
+          runtime.apply(ctx, pluginApply)
+          return
         }
         // The live module keeps the newest code for a later reload to use.
         runtime.current = pluginApply
