@@ -1562,3 +1562,20 @@ test('the sidebar hand-off inserts the prompt instead of sending it', async () =
   assert.equal(calls.filter((call) => call.path.includes('/agent/prompt')).length, 0)
   assert.match(textOf(tree), /已插入输入框/)
 })
+
+test('the mail frame follows the page palette and grows with its content', () => {
+  const { emailFrameDocument } = plugin.testHelpers
+  assert.equal(typeof emailFrameDocument, 'function', 'the frame builder is exposed for tests')
+
+  const light = emailFrameDocument('<p>hi</p>', true, false)
+  const dark = emailFrameDocument('<p>hi</p>', true, true)
+  assert.match(light, /background:#ffffff/)
+  assert.match(dark, /background:#1c1c20/)
+  assert.match(dark, /color:#e7e7ea/)
+  // The safety envelope is identical in both palettes.
+  for (const doc of [light, dark]) {
+    assert.match(doc, /default-src 'none'/)
+    assert.match(doc, /form-action 'none'/)
+    assert.match(doc, /frame-src 'none'/)
+  }
+})

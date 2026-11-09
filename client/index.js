@@ -296,7 +296,7 @@ window.__ModuleLoader__.load({
 .ml-msg-from{font-weight:600;color:var(--dsw-alias-label-primary)}
 .ml-msg-body{white-space:pre-wrap;word-break:break-word;font-size:13px}
 .ml-msg-html{margin:2px 0 0}
-.ml-msg-frame{width:100%;border:0;display:block;border-radius:8px;background:#fff;overflow:hidden}
+.ml-msg-frame{width:100%;border:0;display:block;border-radius:8px;background:transparent}
 .ml-msg-images{margin-top:6px;font-size:12px;height:26px}
 .ml-empty{color:var(--dsw-alias-label-secondary);padding:32px 24px;text-align:center;display:flex;flex-direction:column;gap:8px;align-items:center}
 .ml-banner{margin:12px 20px 0;padding:8px 12px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);color:var(--dsw-alias-state-warn-primary);font-size:12px;display:flex;gap:10px;align-items:center}
@@ -544,6 +544,7 @@ window.__ModuleLoader__.load({
       buildMailPrompt,
       anchorMessageOf,
       sidebarBody: MaillySidebarBody,
+      emailFrameDocument,
       dictionaryFor,
       draftMatches,
       findDraft,
@@ -675,21 +676,45 @@ window.__ModuleLoader__.load({
     // remote loads, so a mail body cannot reach the app, the network, or the
     // agent. Plain text stays the fallback and the only thing the model sees.
 
-    const EMAIL_FRAME_CSS = `
+    /** The frame's own stylesheet, in the page's light or dark palette. */
+    function emailFrameCss(dark) {
+      const paper = dark ? '#1c1c20' : '#ffffff'
+      const ink = dark ? '#e7e7ea' : '#1f2328'
+      const muted = dark ? '#a3a3ac' : '#57606a'
+      const rule = dark ? '#3a3a42' : '#d0d7de'
+      const link = dark ? '#79b8ff' : '#0b62d6'
+      return `
 html,body{margin:0;padding:0}
-body{background:#fff;color:#1f2328;font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-break:break-word;overflow-wrap:anywhere;padding:10px 12px}
+body{background:${paper};color:${ink};font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-break:break-word;overflow-wrap:anywhere;padding:10px 12px}
 img{max-width:100%;height:auto}
 table{max-width:100%;border-collapse:collapse}
 td,th{max-width:100%;vertical-align:top}
 pre{white-space:pre-wrap;word-break:break-word}
-a{color:#0b62d6}
-blockquote{margin:0 0 0 10px;padding-left:10px;border-left:2px solid #d0d7de;color:#57606a}
+a{color:${link}}
+blockquote{margin:0 0 0 10px;padding-left:10px;border-left:2px solid ${rule};color:${muted}}
 h1,h2,h3,h4{line-height:1.3;margin:.6em 0 .4em}
 p{margin:0 0 .7em}
 `
+    }
+
+    /** Whether the app is showing its dark theme. */
+    function pageIsDark() {
+      try {
+        const body = globalThis.document && globalThis.document.body
+        if (!body) return false
+        if (body.hasAttribute('data-ds-dark-theme')) return true
+        const background = getComputedStyle(body).backgroundColor
+        const match = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(background || '')
+        if (!match) return false
+        const [r, g, b] = [Number(match[1]), Number(match[2]), Number(match[3])]
+        return 0.299 * r + 0.587 * g + 0.114 * b < 128
+      } catch {
+        return false
+      }
+    }
 
     /** The sandboxed document for one mail body. */
-    function emailFrameDocument(html, allowImages) {
+    function emailFrameDocument(html, allowImages, dark) {
       const csp = [
         "default-src 'none'",
         `img-src ${allowImages ? 'https: http: data:' : 'data:'}`,
@@ -704,7 +729,7 @@ p{margin:0 0 .7em}
         '<!doctype html><html><head><meta charset="utf-8">' +
         `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
         '<base target="_blank">' +
-        `<style>${EMAIL_FRAME_CSS}</style></head><body>${html}</body></html>`
+        `<style>${emailFrameCss(Boolean(dark))}</style></head><body>${html}</body></html>`
       )
     }
 
@@ -716,7 +741,8 @@ p{margin:0 0 .7em}
       try {
         const doc = frame && frame.contentDocument
         const next = doc && doc.body ? doc.body.scrollHeight : 0
-        return next > 0 ? Math.min(Math.max(next + 4, 60), 1400) : 0
+        // Generous cap: the reader scrolls the column, not a nested frame.
+        return next > 0 ? Math.min(Math.max(next + 4, 60), 8000) : 0
       } catch {
         return 0
       }
@@ -1595,7 +1621,7 @@ p{margin:0 0 .7em}
             // measure the body and size the frame to it.
             sandbox: 'allow-same-origin',
             referrerPolicy: 'no-referrer',
-            srcDoc: emailFrameDocument(html, allowImages),
+            srcDoc: emailFrameDocument(html, allowImages, pageIsDark()),
             style: { height: `${height}px` },
             onLoad: (event) => scheduleMeasure(key, event && event.target),
             title: text('emailFrameTitle'),
@@ -2505,7 +2531,7 @@ p{margin:0 0 .7em}
             className: 'ml-msg-frame',
             sandbox: 'allow-same-origin',
             referrerPolicy: 'no-referrer',
-            srcDoc: emailFrameDocument(html, allowImages),
+            srcDoc: emailFrameDocument(html, allowImages, pageIsDark()),
             style: { height: `${emailHeights[key] || 200}px` },
             onLoad: (event) => measure(key, event && event.target),
             title: t('emailFrameTitle'),
