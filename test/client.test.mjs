@@ -1035,3 +1035,19 @@ test('a reloaded bundle hands its code to the page already running it', () => {
   // so a reload can never leave the page without its entry.
   assert.deepEqual(calls, ['register', 'register'])
 })
+
+test('the hand-off button is readable in every theme', () => {
+  const source = read()
+  // No white-on-brand text, no color-mix dependency: both were unreadable in
+  // the review styling.
+  assert.doesNotMatch(source, /\.ml-btn-primary\{[^}]*color:#fff/)
+  assert.doesNotMatch(source, /color-mix\(/)
+  // The hand-off uses the solid brand action style, which sets its own text
+  // color from theme tokens.
+  assert.match(source, /\.ml-btn-agent\{[^}]*background:var\(--dsw-alias-brand-primary\)/)
+  assert.match(source, /\.ml-btn-agent\{[^}]*color:var\(--dsw-alias-bg-base\)/)
+  const main = registrations.find((entry) => entry.options.name === 'main')
+  const tree = main.component({})
+  const sourceText = read()
+  assert.match(sourceText, /className: 'ml-btn-agent',\s*\n\s*onClick: handToAgent/)
+})

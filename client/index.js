@@ -211,7 +211,12 @@ window.__ModuleLoader__.load({
 .ml-btn{height:28px;padding:0 12px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;cursor:pointer;white-space:nowrap}
 .ml-btn:hover{border-color:var(--dsw-alias-border-l2)}
 .ml-btn:disabled{opacity:.55;cursor:default}
-.ml-btn-primary{background:var(--dsw-alias-brand-primary);border-color:transparent;color:#fff}
+/* Primary action: brand border and text on the raised surface. No white text
+   on the brand fill (unreadable in the review/approval styling) and no
+   color-mix dependency. */
+.ml-btn-primary{background:var(--dsw-alias-bg-layer-1);border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-brand-primary);font-weight:600;box-shadow:inset 0 0 0 1px var(--dsw-alias-brand-primary)}
+.ml-btn-primary:hover{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-brand-primary)}
+.ml-btn-primary:disabled{opacity:.6;color:var(--dsw-alias-brand-primary)}
 .ml-btn-ghost{background:transparent}
 .ml-body{flex:1 1 auto;min-height:0;display:flex}
 .ml-list{width:320px;flex:0 0 320px;min-height:0;overflow-y:auto;border-right:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}
@@ -226,7 +231,12 @@ window.__ModuleLoader__.load({
 .ml-reader-head{flex:0 0 auto;padding:14px 20px 12px;border-bottom:1px solid var(--dsw-alias-border-l1);display:flex;flex-direction:column;gap:4px}
 .ml-reader-title{font-size:16px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ml-reader-meta{font-size:12px;color:var(--dsw-alias-label-secondary);display:flex;gap:8px;align-items:center;flex-wrap:wrap}
-.ml-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap}
+.ml-actions{display:flex;gap:8px;margin-top:8px;flex-wrap:wrap;align-items:center}
+.ml-btn-agent{height:30px;padding:0 14px;border-radius:8px;border:1px solid var(--dsw-alias-brand-primary);background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-bg-base);font:inherit;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px;box-shadow:0 1px 2px rgba(0,0,0,.12)}
+.ml-btn-agent:hover{filter:brightness(1.08)}
+.ml-btn-agent:active{filter:brightness(.94)}
+.ml-btn-agent:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:2px}
+.ml-btn-agent:disabled{opacity:.55;cursor:default}
 .ml-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:16px 20px 24px}
 .ml-message{border:1px solid var(--dsw-alias-border-l1);border-radius:10px;padding:12px 14px;margin-bottom:12px;background:var(--dsw-alias-bg-layer-1)}
 .ml-message-out{border-style:dashed;background:var(--dsw-alias-bg-layer-2)}
@@ -1601,7 +1611,17 @@ window.__ModuleLoader__.load({
             h(
               'div',
               { className: 'ml-actions' },
-              h('button', { className: 'ml-btn ml-btn-primary', onClick: handToAgent, disabled: demo }, text('askAgent')),
+              h(
+                'button',
+                {
+                  className: 'ml-btn-agent',
+                  onClick: handToAgent,
+                  disabled: demo,
+                  title: text('agentPanelHint'),
+                },
+                h(MaillyIcon, { size: 14 }),
+                text('askAgent'),
+              ),
               h(
                 'button',
                 {
@@ -1892,7 +1912,7 @@ window.__ModuleLoader__.load({
                   h(
                     'button',
                     {
-                      className: 'ml-btn ml-btn-primary',
+                      className: 'ml-btn-agent',
                       disabled: agentBusy || !agentInput.trim() || !thread,
                       onClick: askAgentPanel,
                     },
