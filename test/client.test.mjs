@@ -748,12 +748,13 @@ test('a draft that changed after review is refused and re-shown', async () => {
     draftAfterOpen: { id: 'd1', revision: 4, status: 'pending', text: '改过的正文' },
   })
   const { settle } = mountWorkbench()
-  // Wait until the list's background prefetch has answered: the panel must
-  // compare against the version the page actually showed.
-  for (let attempt = 0; attempt < 100 && !calls.some((call) => call.path.includes('/thread?id=')); attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 10))
-  }
+  // Let the list's background prefetch finish before the user acts, so the
+  // panel's "shown" version is the draft version this test controls.
+  await new Promise((resolve) => setTimeout(resolve, 300))
   await settle(2)
+  const stopTimers = () => {
+    for (const handle of intervals.splice(0)) clearInterval(handle)
+  }
   let tree = await settle()
   byClass(tree, 'ml-row')[0].props.onClick()
   tree = await settle()
@@ -767,6 +768,7 @@ test('a draft that changed after review is refused and re-shown', async () => {
   assert.equal(calls.filter((call) => /\/approve$/.test(call.path)).length, 0, 'must not call approve')
   assert.match(textOf(tree), /草稿在你审核后发生了变化/)
   assert.match(textOf(tree), /改过的正文/)
+  stopTimers()
 })
 
 test('a 409 from the Host is shown as "the draft changed"', async () => {
