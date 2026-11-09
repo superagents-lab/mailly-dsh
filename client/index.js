@@ -706,7 +706,7 @@ window.__ModuleLoader__.load({
       const link = '#0b62d6'
       return `
 html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden}
-body{background:${paper};color:${ink};font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-break:break-word;overflow-wrap:anywhere;padding:10px 12px}
+body{background:${paper};color:${ink};font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-break:break-word;overflow-wrap:anywhere;padding:8px 10px}
 /* Authored mail often pins a desktop width; keep it inside the column. */
 body *{max-width:100% !important;box-sizing:border-box}
 img{max-width:100% !important;height:auto}
@@ -758,6 +758,24 @@ p{margin:0 0 .7em}
 
     /** Re-measure a body frame a few times while its images arrive. */
     const MEASURE_DELAYS = [0, 120, 350, 800, 1600, 3000]
+
+    /**
+     * Re-measure a body frame whenever its width changes. The height was taken
+     * at one width; a narrower column wraps more and a wider one less, so
+     * without this the mail is clipped or leaves a gap after a resize.
+     */
+    function observeFrameWidth(frame, remeasure) {
+      if (!frame || typeof ResizeObserver === 'undefined') return null
+      let lastWidth = frame.clientWidth
+      const observer = new ResizeObserver(() => {
+        const width = frame.clientWidth
+        if (Math.abs(width - lastWidth) < 2) return
+        lastWidth = width
+        remeasure()
+      })
+      observer.observe(frame)
+      return observer
+    }
 
     /** Size a body frame to its content, once it has loaded. */
     function frameHeightOf(frame) {
@@ -1095,6 +1113,14 @@ p{margin:0 0 .7em}
           mounted.current = false
           // A body frame may still be waiting to be re-measured.
           for (const handle of frameTimers.current.splice(0)) clearTimeout(handle)
+          for (const observer of frameObservers.current.values()) {
+            try {
+              observer.disconnect()
+            } catch {
+              // Already gone.
+            }
+          }
+          frameObservers.current.clear()
         }
       }, [])
 
@@ -1628,6 +1654,15 @@ p{margin:0 0 .7em}
        * them off per message), else plain text.
        */
       /** Measure a body frame now and again while its images arrive. */
+      const frameObservers = useRef(new Map())
+
+      const watchFrame = (key, frame) => {
+        const existing = frameObservers.current.get(key)
+        if (existing) existing.disconnect()
+        const observer = observeFrameWidth(frame, () => scheduleMeasure(key, frame))
+        if (observer) frameObservers.current.set(key, observer)
+      }
+
       const scheduleMeasure = (key, frame) => {
         const run = () => {
           const next = frameHeightOf(frame)
@@ -1661,7 +1696,11 @@ p{margin:0 0 .7em}
             referrerPolicy: 'no-referrer',
             srcDoc: emailFrameDocument(html, allowImages, pageIsDark()),
             style: { height: `${height}px` },
-            onLoad: (event) => scheduleMeasure(key, event && event.target),
+            onLoad: (event) => {
+              const frame = event && event.target
+              scheduleMeasure(key, frame)
+              watchFrame(key, frame)
+            },
             title: text('emailFrameTitle'),
           }),
           hasImages
@@ -2453,11 +2492,20 @@ p{margin:0 0 .7em}
       const [emailImages, setEmailImages] = useState({})
       const [emailHeights, setEmailHeights] = useState({})
       const frameTimers = useRef([])
+      const frameObservers = useRef(new Map())
       const queryRef = useRef('')
 
       useEffect(() => {
         return () => {
           for (const handle of frameTimers.current.splice(0)) clearTimeout(handle)
+          for (const observer of frameObservers.current.values()) {
+            try {
+              observer.disconnect()
+            } catch {
+              // Already gone.
+            }
+          }
+          frameObservers.current.clear()
         }
       }, [])
 
@@ -2556,6 +2604,14 @@ p{margin:0 0 .7em}
         if (frameTimers.current.length > 240) frameTimers.current.splice(0, frameTimers.current.length - 240)
       }
 
+      // Track the frame's width so a resize re-measures instead of clipping.
+      const watchFrame = (key, frame) => {
+        const existing = frameObservers.current.get(key)
+        if (existing) existing.disconnect()
+        const observer = observeFrameWidth(frame, () => measure(key, frame))
+        if (observer) frameObservers.current.set(key, observer)
+      }
+
       const renderBody = (message) => {
         const html = typeof message.html === 'string' ? message.html : ''
         if (!html) return h('div', { className: 'ml-msg-body' }, message.body || '')
@@ -2571,7 +2627,11 @@ p{margin:0 0 .7em}
             referrerPolicy: 'no-referrer',
             srcDoc: emailFrameDocument(html, allowImages, pageIsDark()),
             style: { height: `${emailHeights[key] || 200}px` },
-            onLoad: (event) => measure(key, event && event.target),
+            onLoad: (event) => {
+              const frame = event && event.target
+              measure(key, frame)
+              watchFrame(key, frame)
+            },
             title: t('emailFrameTitle'),
           }),
           hasImages
