@@ -696,9 +696,8 @@ function sendFetch({ approveStatus = 200, approveError = 'unexpected', draftAfte
     if (path.includes('/thread?id=')) {
       draftFetches += 1
       if (draftAfterOpen) {
-        // Every read after the first one the page performs returns the
-        // changed draft: whichever read the panel compared against, the
-        // version it shows no longer matches.
+        // The first read is the one the panel shows; every later read (the
+        // confirm re-read, a background refresh) sees the changed draft.
         return ok(threadPayload({ drafts: [draftFetches === 1 ? draft : draftAfterOpen] }))
       }
       return ok(threadPayload({ drafts: [draft] }))
@@ -771,8 +770,16 @@ test('a draft that changed after review is refused and re-shown', async () => {
   tree = await settle()
   walk(tree).find((node) => node.type === 'input' && node.props.type === 'checkbox').props.onChange({ target: { checked: true } })
   tree = await settle()
-  byText(tree, '立即发送').props.onClick()
-  tree = await settle(20)
+  const sendButton = byText(tree, '立即发送')
+  sendButton.props.onClick()
+  // The confirm path re-reads the thread; on CI the harness renders more
+  // often, so wait for the page to settle on the refusal rather than a fixed
+  // number of passes.
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    tree = await settle(1)
+    if (calls.some((call) => /\/approve$/.test(call.path))) break
+    if (textOf(tree).includes('草稿在你审核后发生了变化')) break
+  }
 
   const approveCalls = calls.filter((call) => /\/approve$/.test(call.path))
   assert.equal(
