@@ -888,7 +888,10 @@ function agentMessageOf(record) {
   if (!event || typeof event !== 'object') return null
   if (event.type === 'user/message' || event.type === 'assistant/message') {
     const data = event.data || {}
-    const content = Array.isArray(data.content) ? data.content : []
+    // An assistant record nests its message; a user record carries the
+    // content directly.
+    const body = data.message && Array.isArray(data.message.content) ? data.message : data
+    const content = Array.isArray(body.content) ? body.content : []
     const text = content
       .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
       .map((part) => part.text)

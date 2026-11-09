@@ -641,3 +641,55 @@ test('agent routes refuse politely without a session service or valid input', as
     wired.dispose()
   }
 })
+
+test('the transcript reads the nested assistant shape and hides system context', async () => {
+  const sessionController = {
+    async create() {
+      return { sessionId: 's-1' }
+    },
+    async prompt() {
+      return { accepted: true }
+    },
+    async events() {
+      return {
+        cursor: 4,
+        hasMore: false,
+        records: [
+          { type: 'event', event: { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '读这封邮件' }] } } },
+          {
+            type: 'event',
+            event: {
+              type: 'user/message',
+              seq: 2,
+              time: 2,
+              data: { content: [{ type: 'text', text: '<system-reminder>internal</system-reminder>' }] },
+            },
+          },
+          {
+            type: 'event',
+            event: {
+              type: 'assistant/message',
+              seq: 3,
+              time: 3,
+              data: { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: '草稿已保存' }] } },
+            },
+          },
+        ],
+      }
+    },
+  }
+  const wired = createHarness({ services: { sessionController } })
+  try {
+    const transcript = await send(wired.handler, { url: '/mailly-api/agent?session=s-1' })
+    assert.equal(transcript.status, 200)
+    assert.deepEqual(
+      transcript.body.messages.map((message) => [message.role, message.text]),
+      [
+        ['user', '读这封邮件'],
+        ['assistant', '草稿已保存'],
+      ],
+    )
+  } finally {
+    wired.dispose()
+  }
+})
