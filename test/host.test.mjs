@@ -775,3 +775,35 @@ test('sanitized HTML drops scripts, handlers and remote loads', async () => {
     globalThis.fetch = realFetch
   }
 })
+
+test('the agent session accepts a prompt that carries the conversation', async () => {
+  const sessions = { prompts: [] }
+  const sessionController = {
+    async create() {
+      return { sessionId: 's-1' }
+    },
+    async prompt(request) {
+      sessions.prompts.push(request)
+      return { accepted: true }
+    },
+    async events() {
+      return { cursor: 0, hasMore: false, records: [] }
+    },
+  }
+  const wired = createHarness({ services: { sessionController } })
+  try {
+    // The page inlines the thread, so a long prompt must survive intact.
+    const long = `thread_id: t1\n\n<mail>\n${'x'.repeat(50_000)}\n</mail>`
+    const started = await send(wired.handler, {
+      method: 'POST',
+      url: '/mailly-api/agent/session',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thread_id: 'thread-1', prompt: long }),
+    })
+    assert.equal(started.status, 200)
+    assert.equal(sessions.prompts.length, 1)
+    assert.equal(sessions.prompts[0].content[0].text.length, long.length)
+  } finally {
+    wired.dispose()
+  }
+})

@@ -960,6 +960,7 @@ async function discardDraft(req, res, draftId, key) {
 // restart resumes the same session instead of starting another one.
 
 const AGENT_MESSAGE_LIMIT = 60
+const AGENT_PROMPT_LIMIT = 120_000
 const AGENT_TEXT_LIMIT = 12_000
 
 function sessionsPath() {
@@ -1049,7 +1050,9 @@ async function startAgentSession(req, res, ctx) {
     send(res, 400, { error: 'invalid_thread_id' })
     return
   }
-  const prompt = typeof body?.prompt === 'string' ? body.prompt.slice(0, 4000) : ''
+  // The page hands over the conversation it already holds, so this cap is
+  // generous; the client keeps its own budget below it.
+  const prompt = typeof body?.prompt === 'string' ? body.prompt.slice(0, AGENT_PROMPT_LIMIT) : ''
   const threads = await readSessionMap()
   let sessionId = threads[threadId]
   if (!sessionId) {
@@ -1198,13 +1201,14 @@ function startInboundAutomation(ctx) {
       }
     },
   })
-  automation = { store, poller }
+  automation = { store, poller, running: false }
   ctx.effect(() => {
     let running = null
     store
       .load()
       .then((state) => {
         if (!state.enabled) return
+        automation.running = true
         running = poller.start()
       })
       .catch((error) => {
@@ -1225,8 +1229,12 @@ async function applyAutomationEnabled(enabled) {
   await store.save(state)
   if (!automation) return state
   if (enabled) {
-    if (automation.poller.getState() === null) automation.poller.start()
+    if (!automation.running) {
+      automation.running = true
+      automation.poller.start()
+    }
   } else {
+    automation.running = false
     await automation.poller.stop()
   }
   return state
@@ -1238,7 +1246,7 @@ async function automationStatus() {
   return {
     ...describeAutomation(state),
     available: Boolean(automation),
-    running: Boolean(automation && automation.poller.getState() !== null),
+    running: Boolean(automation && automation.running),
   }
 }
 

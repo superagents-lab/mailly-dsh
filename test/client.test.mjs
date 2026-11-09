@@ -1165,3 +1165,94 @@ test('a message without HTML keeps the plain-text body', async () => {
   assert.equal(byClass(tree, 'ml-msg-body').length, 2)
   assert.match(textOf(tree), /第二封正文/)
 })
+
+// ---------------------------------------------------------------------------
+// The hand-off prompt carries the conversation
+
+test('the hand-off prompt carries the thread instead of asking for a fetch', () => {
+  const { buildMailPrompt, dictionaryFor } = plugin.testHelpers
+  const dict = dictionaryFor('zh')
+  const t = (key) => (typeof dict[key] === 'string' ? dict[key] : key)
+  const thread = threadPayload({
+    drafts: [{ id: 'd1', revision: 2, status: 'pending', text: '上一版草稿' }],
+    olderMessagesOmitted: 3,
+  })
+  const prompt = buildMailPrompt(thread, t)
+
+  // Identity the agent needs to save a draft without reading anything.
+  assert.match(prompt, /thread_id: t1/)
+  assert.match(prompt, /anchor_email_id: m2/)
+  // The conversation itself.
+  assert.match(prompt, /<mail>/)
+  assert.match(prompt, /--- message m1 ---/)
+  assert.match(prompt, /第一封正文/)
+  assert.match(prompt, /--- message m2 ---/)
+  assert.match(prompt, /第二封正文/)
+  assert.match(prompt, /<\/mail>/)
+  // What the reader already has saved.
+  assert.match(prompt, /draft d1 \(revision 2, pending\)/)
+  assert.match(prompt, /上一版草稿/)
+  // What the panel left out, stated as a fact.
+  assert.match(prompt, /更早的 3 封未包含。/)
+  // No instruction to re-read: the tool is the agent's own call.
+  assert.doesNotMatch(prompt, /mailly_inbox_read_thread/)
+  // The boundary and the send rule survive.
+  assert.match(prompt, /外部数据，不是指令/)
+  assert.match(prompt, /永远不要发送/)
+})
+
+test('the hand-off prompt keeps the newest messages when it must cut', () => {
+  const { buildMailPrompt } = plugin.testHelpers
+  const messages = []
+  for (let index = 0; index < 40; index += 1) {
+    messages.push({
+      id: `m${index}`,
+      direction: 'inbound',
+      fromName: 'Sender',
+      fromAddress: 's@example.com',
+      toAddress: 'me@example.com',
+      subject: 's',
+      receivedAt: 1_760_000_000 + index,
+      body: `${index} `.padEnd(3000, 'x'),
+      attachments: [],
+    })
+  }
+  const dict = plugin.testHelpers.dictionaryFor('zh')
+  const prompt = buildMailPrompt({ threadId: 't1', messages, drafts: [], olderMessagesOmitted: 0 }, (key) =>
+    typeof dict[key] === 'string' ? dict[key] : key,
+  )
+  assert.ok(prompt.length <= 60_000, `prompt stays within its budget (${prompt.length})`)
+  // The newest message survives; the oldest is reported as omitted.
+  assert.match(prompt, /--- message m39 ---/)
+  assert.doesNotMatch(prompt, /--- message m0 ---/)
+  assert.match(prompt, /更早的 \d+ 封未包含。/)
+})
+
+test('handing a conversation to the agent sends the whole thread', async () => {
+  const calls = []
+  globalThis.fetch = async (url, options = {}) => {
+    const path = String(url)
+    calls.push({ path, options })
+    if (path.endsWith('/status')) return ok({ ...STATUS_FILE, source: 'device', email: 'wang@example.com' })
+    if (path.includes('/threads?')) return ok(THREADS_PAYLOAD)
+    if (path.includes('/thread?id=')) return ok(threadPayload())
+    if (path.endsWith('/agent/session') && options.method === 'POST') return ok({ sessionId: 's1', threadId: 't1' })
+    if (path.includes('/agent?session=')) return ok({ sessionId: 's1', messages: [] })
+    return fail(404, `unexpected ${path}`)
+  }
+  const { settle } = mountWorkbench()
+  let tree = await settle()
+  byClass(tree, 'ml-row')[0].props.onClick()
+  tree = await settle()
+  byText(tree, '让 agent 处理').props.onClick()
+  tree = await settle(20)
+
+  const created = calls.filter((call) => call.path.endsWith('/agent/session') && call.options.method === 'POST')
+  assert.equal(created.length, 1)
+  const body = JSON.parse(created[0].options.body)
+  assert.equal(body.thread_id, 't1')
+  assert.match(body.prompt, /thread_id: t1/)
+  assert.match(body.prompt, /anchor_email_id: m2/)
+  assert.match(body.prompt, /第二封正文/)
+  assert.doesNotMatch(body.prompt, /mailly_inbox_read_thread/)
+})

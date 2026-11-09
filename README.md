@@ -124,6 +124,10 @@ conversation owns one DSH session (mapped in `$DSH_HOME/mailly/sessions.json`, m
 starts it with the draft task, later questions go to the same session, and the panel shows the transcript
 while you keep reading the mail. The panel never sends anything.
 
+The hand-off prompt carries the conversation itself — every message as plain text, the message a reply
+anchors to, and any drafts already saved — so the agent starts from exactly what the reader sees and needs no
+read round-trip. `mailly_inbox_read_thread` stays available for whatever the agent decides it still needs.
+
 ## Inbound automation
 
 Off by default. When enabled (`PUT /mailly-api/automation { enabled: true }`), the Host long-polls Mailly's
