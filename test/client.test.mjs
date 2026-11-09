@@ -1018,17 +1018,22 @@ test('a reloaded bundle hands its code to the page already running it', () => {
       getLocale: () => ({ active: 'zh' }),
     },
     slots: {
-      inject: (_key, callback) => callback(),
+      inject: (_key, callback) => {
+        callback()
+        return () => calls.push('dispose')
+      },
       register: () => {
         calls.push('register')
-        return () => {}
+        return () => calls.push('dispose')
       },
     },
     get: () => undefined,
     on: () => () => {},
   })
   assert.equal(registrations.length, before, 'the page is not registered a second time')
-  // The live instance re-registers with the newest code, which is a
-  // replacement, not a duplicate: the same two slots, once.
-  assert.equal(calls.length, 2)
+  // The reloaded code replaces the previous registrations: the old ones are
+  // disposed first, then the same two slots are registered again.
+  // The first instance never registered through this context, so there is
+  // nothing to dispose; the reloaded code registers the two slots once.
+  assert.deepEqual(calls, ['register', 'register'])
 })

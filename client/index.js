@@ -1927,9 +1927,15 @@ window.__ModuleLoader__.load({
         // first instance already owns the slots, so hand the newest code to it
         // rather than registering the page twice.
         if (runtime.apply && runtime.apply !== pluginApply) {
-          // Re-enter the live instance's apply with this module's code.
-          runtime.apply(ctx, pluginApply)
-          return
+          // A reloaded bundle: re-register the page with this module's code.
+          // Running both instances would make the second one's slot disposers
+          // remove the first one's registrations, so only this one runs.
+          runtime.apply = pluginApply
+          try {
+            runtime.cleanup?.()
+          } catch {
+            // The previous instance's registrations are already gone.
+          }
         }
         // The live module keeps the newest code for a later reload to use.
         runtime.current = pluginApply
@@ -1960,57 +1966,61 @@ window.__ModuleLoader__.load({
           }
         }
 
-        const disposeLocale = []
-        disposeLocale.push(ctx.locale.register('mailly', 'en', EN))
-        disposeLocale.push(ctx.locale.register('mailly', 'zh', ZH))
-        ctx.on('dispose', () => {
-          for (const dispose of disposeLocale.splice(0)) {
+        const disposers = []
+        runtime.cleanup = () => {
+          for (const dispose of disposers.splice(0)) {
             try {
               dispose()
             } catch {
               // Already removed.
             }
           }
-        })
+        }
+        disposers.push(ctx.locale.register('mailly', 'en', EN))
+        disposers.push(ctx.locale.register('mailly', 'zh', ZH))
 
-        ctx.slots.inject('sidebar.panellist', () =>
-          ctx.slots.register(
-            { name: 'sidebar.panellist', id: 'mailly', order: 20, label: () => translate('nav') },
-            MaillyIcon,
+        disposers.push(
+          ctx.slots.inject('sidebar.panellist', () =>
+            ctx.slots.register(
+              { name: 'sidebar.panellist', id: 'mailly', order: 20, label: () => translate('nav') },
+              MaillyIcon,
+            ),
           ),
         )
 
-        ctx.slots.inject('main', () =>
-          ctx.slots.register({ name: 'main', key: 'mailly', locale: 'mailly' }, (props) =>
-            h(
-              WorkbenchBoundary,
-              null,
-              h(MaillyWorkbench, {
-                ...props,
-                // The slot renderer hands the page a `t` seat for this
-                // namespace; use it so language switches re-render the page.
-                translate: (key) => {
-                  try {
-                    if (typeof props?.t === 'function') {
-                      const value = props.t(key)
-                      if (typeof value === 'string' && value && value !== key) return value
+        disposers.push(
+          ctx.slots.inject('main', () =>
+            ctx.slots.register({ name: 'main', key: 'mailly', locale: 'mailly' }, (props) =>
+              h(
+                WorkbenchBoundary,
+                null,
+                h(MaillyWorkbench, {
+                  ...props,
+                  // The slot renderer hands the page a `t` seat for this
+                  // namespace; use it so language switches re-render the page.
+                  translate: (key) => {
+                    try {
+                      if (typeof props?.t === 'function') {
+                        const value = props.t(key)
+                        if (typeof value === 'string' && value && value !== key) return value
+                      }
+                    } catch {
+                      // Fall back to the bound lookup below.
                     }
-                  } catch {
-                    // Fall back to the bound lookup below.
-                  }
-                  return translate(key)
-                },
-                getLocale: () => {
-                  try {
-                    return String(ctx.locale.getLocale().active || 'zh')
-                  } catch {
-                    return 'zh'
-                  }
-                },
-                uiWorkspace: ctx.get('uiWorkspace'),
-              }),
+                    return translate(key)
+                  },
+                  getLocale: () => {
+                    try {
+                      return String(ctx.locale.getLocale().active || 'zh')
+                    } catch {
+                      return 'zh'
+                    }
+                  },
+                  uiWorkspace: ctx.get('uiWorkspace'),
+                }),
+              ),
             ),
-          ),
+          )
         )
     }
   },
