@@ -1691,3 +1691,15 @@ test('a second activation survives the dictionaries the first one registered', (
   for (const dispose of effects) if (typeof dispose === 'function') dispose()
   assert.equal(dicts.size, 0, 'the fiber owns its dictionaries')
 })
+
+test('the sidebar carries the message-body styles it renders', () => {
+  const source = read()
+  // Both views render the body frame, so its width rule must exist in a block
+  // both stylesheets include; an iframe without one falls back to 300px.
+  assert.match(source, /const MESSAGE_CSS = `/)
+  assert.match(source, /\.ml-msg-frame\{[^}]*width:100%/)
+  const pageCss = source.slice(source.indexOf('const CSS = `'), source.indexOf('const SIDEBAR_CSS = `'))
+  assert.match(pageCss, /\$\{MESSAGE_CSS\}/, 'the page stylesheet includes the shared block')
+  const sidebarCss = source.slice(source.indexOf('const SIDEBAR_CSS = `'))
+  assert.match(sidebarCss, /\$\{MESSAGE_CSS\}/, 'the sidebar stylesheet includes the shared block')
+})

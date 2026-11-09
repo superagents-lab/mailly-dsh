@@ -253,6 +253,16 @@ window.__ModuleLoader__.load({
       draftNotPending: '这封草稿已经不在待审核状态。',
     }
 
+    // The message body renders in both views, so its styles live here rather
+    // than in one view's stylesheet: an iframe without a width rule falls back
+    // to its 300px default, which is what a sidebar-only page used to show.
+    const MESSAGE_CSS = `
+.ml-msg-body{white-space:pre-wrap;word-break:break-word;font-size:13px}
+.ml-msg-html{margin:2px 0 0;width:100%;max-width:100%;min-width:0}
+.ml-msg-frame{display:block;width:100%;max-width:100%;min-width:0;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:#fff}
+.ml-msg-images{margin-top:6px;font-size:12px;height:26px}
+`
+
     const CSS = `
 .ml-root{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5}
 .ml-top{display:flex;align-items:center;gap:8px;padding:0 16px;height:48px;flex:0 0 auto;border-bottom:1px solid var(--dsw-alias-border-l1)}
@@ -294,11 +304,7 @@ window.__ModuleLoader__.load({
 .ml-message-out{border-style:dashed;background:var(--dsw-alias-bg-layer-2)}
 .ml-msg-head{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary);margin-bottom:6px}
 .ml-msg-from{font-weight:600;color:var(--dsw-alias-label-primary)}
-.ml-msg-body{white-space:pre-wrap;word-break:break-word;font-size:13px}
-.ml-msg-html{margin:2px 0 0}
-.ml-msg-html{width:100%;max-width:100%;min-width:0}
-.ml-msg-frame{display:block;width:100%;max-width:100%;min-width:0;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:#fff}
-.ml-msg-images{margin-top:6px;font-size:12px;height:26px}
+${MESSAGE_CSS}
 .ml-empty{color:var(--dsw-alias-label-secondary);padding:32px 24px;text-align:center;display:flex;flex-direction:column;gap:8px;align-items:center}
 .ml-banner{margin:12px 20px 0;padding:8px 12px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);color:var(--dsw-alias-state-warn-primary);font-size:12px;display:flex;gap:10px;align-items:center}
 .ml-error{color:var(--dsw-alias-state-error-primary);font-size:12px}
@@ -2329,6 +2335,7 @@ p{margin:0 0 .7em}
     // The tab's design system: one narrow column, DSH tokens only, so it reads
     // as part of the app rather than a page inside it.
     const SIDEBAR_CSS = `
+${MESSAGE_CSS}
 .ml-sb{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5}
 .ml-sb *{box-sizing:border-box}
 
