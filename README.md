@@ -103,6 +103,9 @@ All under `http://127.0.0.1:<port>/mailly-api`, loopback and same-origin only:
 | `POST /drafts/<id>/discard` | Discard a draft: body `{ revision }`; `200 { ok: true }`, `409` when the revision moved. |
 | `GET /balance` | Credit balance. |
 | `GET /automation`, `PUT /automation` | Inbound automation state (`enabled`, `cursor`, `threadCount`, `hourlyCount`, `lastError`, `available`, `running`); `PUT` takes `{ enabled }`. |
+| `POST /agent/session` | Open (or reuse) the DSH session for one conversation: body `{ thread_id, prompt? }` → `{ sessionId, threadId }`; `409 agent_unavailable` without a session service. |
+| `POST /agent/prompt` | Queue a follow-up in that session: body `{ session_id, text }` → `{ accepted: true }`. |
+| `GET /agent?session=` | The session transcript as plain text messages (`user` / `assistant`), newest 60. |
 
 The routes are a fixed surface, not a proxy: unknown paths answer 404 instead of reaching Mailly, and no
 route accepts a caller-chosen upstream URL. No route returns the credential.
@@ -110,6 +113,13 @@ route accepts a caller-chosen upstream URL. No route returns the credential.
 `approve` is the only route that can send, and it only reaches Mailly after re-reading the draft and matching
 the revision and text byte-for-byte against what the page showed. No model tool calls it, and the page never
 calls it without a human click.
+
+## Agent beside the inbox
+
+**Hand to agent** opens the agent panel next to the conversation instead of leaving the page. Each Mailly
+conversation owns one DSH session (mapped in `$DSH_HOME/mailly/sessions.json`, mode 0600): the first hand-off
+starts it with the draft task, later questions go to the same session, and the panel shows the transcript
+while you keep reading the mail. The panel never sends anything.
 
 ## Inbound automation
 
