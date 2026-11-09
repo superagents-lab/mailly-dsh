@@ -1336,7 +1336,16 @@ async function handle(req, res, ctx, path, method, url) {
   send(res, 404, { error: 'not_found' })
 }
 
+// The route handler is a thin indirection: the web server keeps the function
+// it was given for the life of the process, so the function must keep pointing
+// at the newest activation's context and code. Without this, a reload would
+// leave the old module answering requests (and new routes 404) until a
+// restart.
+const runtime = (globalThis[Symbol.for('@mailly/dsh/runtime')] ??= { ctx: null, handle: null })
+
 function createRouteHandler(ctx) {
+  runtime.ctx = ctx
+  runtime.handle = handle
   return async function handler(req, res) {
     try {
       if (!isLoopback(req) || !sameOrigin(req)) {
@@ -1346,7 +1355,8 @@ function createRouteHandler(ctx) {
       const url = new URL(req.url || '/', 'http://localhost')
       const path = url.pathname.slice(ROUTE.length) || '/'
       const method = (req.method || 'GET').toUpperCase()
-      await handle(req, res, ctx, path, method, url)
+      // Always dispatch through the newest activation's handler.
+      await (runtime.handle || handle)(req, res, runtime.ctx || ctx, path, method, url)
     } catch (error) {
       if (res.headersSent) {
         res.end()
@@ -1359,6 +1369,14 @@ function createRouteHandler(ctx) {
   }
 }
 
+/** Take over a route an earlier activation leaked (same process only). */
+function adoptLeakedRoute(ctx) {
+  if (!runtime.handle) return false
+  runtime.ctx = ctx
+  runtime.handle = handle
+  return true
+}
+
 function isStaleRouteError(error) {
   return error instanceof Error && STALE_ROUTE_ERROR.test(error.message)
 }
@@ -1369,12 +1387,15 @@ export function apply(ctx) {
     disposeRoute = ctx.webServer.register({ kind: 'prefix', path: ROUTE, handler: createRouteHandler(ctx) })
   } catch (error) {
     // A previous in-process activation can still own the route because its
-    // cleanup never ran. Failing here would also lose the model tools, so keep
-    // them and warn instead; the page route recovers on the next DSH restart.
+    // cleanup never ran (older builds cleaned up with `ctx.on('dispose')`).
+    // Its handler dispatches through the shared runtime, so point that runtime
+    // at this activation: the new code answers immediately, no restart needed.
     if (!isStaleRouteError(error)) throw error
-    console.warn(
-      `mailly: ${ROUTE} is already owned by a previous activation of this plugin; keeping the model tools available until DeepSeek Harness restarts.`,
-    )
+    if (!adoptLeakedRoute(ctx)) {
+      console.warn(
+        `mailly: ${ROUTE} is owned by another plugin and cannot be adopted; the page route needs a DeepSeek Harness restart.`,
+      )
+    }
   }
   if (disposeRoute) ctx.effect(() => disposeRoute, 'mailly: /mailly-api routes')
   registerTools(ctx)

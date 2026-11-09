@@ -195,18 +195,23 @@ test('ownership of the route is an effect, so unloading releases it', () => {
   assert.equal(second.routes.length, 1)
 })
 
-test('a stale activation owning the route keeps the model tools available', () => {
-  const warnings = []
-  const originalWarn = console.warn
-  console.warn = (...args) => warnings.push(args.join(' '))
-  try {
-    const stale = createHarness({ routeError: new Error('webserver: duplicate prefix route "/mailly-api"') })
-    assert.equal(stale.routes.length, 0)
-    assert.equal(stale.tools.length, 3)
-    assert.match(warnings.join('\n'), /previous activation/)
-  } finally {
-    console.warn = originalWarn
-  }
+test('a stale activation owning the route is adopted, not fatal', () => {
+  // First activation registers the route and publishes its handler.
+  const first = createHarness()
+  assert.equal(first.routes.length, 1)
+
+  // A later activation finds the route already taken; it must still register
+  // its tools and make the leaked route answer with the newest code.
+  const second = createHarness({ routeError: new Error('webserver: duplicate prefix route "/mailly-api"') })
+  assert.equal(second.routes.length, 0)
+  assert.equal(second.tools.length, 3)
+
+  // The adopted route serves the new activation's routes (the old build had
+  // no /automation path at all).
+  return send(first.handler, { url: '/mailly-api/automation' }).then((response) => {
+    assert.equal(response.status, 200)
+    assert.equal(response.body.enabled, false)
+  })
 })
 
 test('an unrelated route error still fails the activation', () => {
