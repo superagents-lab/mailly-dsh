@@ -897,6 +897,7 @@ function agentMessageOf(record) {
     if (!text) return null
     // The page shows the conversation, not the internal instruction blocks.
     if (text.startsWith('Current runtime context.')) return null
+    if (text.startsWith('<system-reminder>')) return null
     return {
       id: `${event.seq ?? ''}-${event.type}`,
       role: event.type === 'user/message' ? 'user' : 'assistant',
