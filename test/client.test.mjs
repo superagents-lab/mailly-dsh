@@ -678,7 +678,10 @@ test('a Host without the device routes falls back to the key card', async () => 
 
 function sendFetch({ approveStatus = 200, approveError = 'unexpected', draftAfterOpen, threadAfterApprove } = {}) {
   const calls = []
-  let opened = false
+  // The list prefetches the visible conversation, so the panel's "shown"
+  // version is the first answer that carries a draft — not simply the first
+  // thread fetch. Count only those.
+  let draftFetches = 0
   const draft = { id: 'd1', revision: 3, status: 'pending', text: '好的，我确认。\n\n谢谢', reviewUrl: 'https://x/review' }
   globalThis.fetch = async (url, options = {}) => {
     const path = String(url)
@@ -686,10 +689,8 @@ function sendFetch({ approveStatus = 200, approveError = 'unexpected', draftAfte
     if (path.endsWith('/status')) return ok({ ...STATUS_FILE, source: 'device', email: 'wang@example.com' })
     if (path.includes('/threads?')) return ok(THREADS_PAYLOAD)
     if (path.includes('/thread?id=')) {
-      if (!opened) {
-        opened = true
-        return ok(threadPayload({ drafts: [draft] }))
-      }
+      draftFetches += 1
+      if (draftFetches === 1) return ok(threadPayload({ drafts: [draft] }))
       if (draftAfterOpen) return ok(threadPayload({ drafts: [draftAfterOpen] }))
       return ok(threadPayload({ drafts: [draft] }))
     }
