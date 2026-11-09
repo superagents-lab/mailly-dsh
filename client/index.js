@@ -612,6 +612,27 @@ window.__ModuleLoader__.load({
       if (THREADS.length > THREAD_CACHE_LIMIT) THREADS.length = THREAD_CACHE_LIMIT
     }
 
+    /** Fetch the first few conversations that are not cached yet. */
+    function prefetchThreads(rows) {
+      const pending = []
+      for (const row of rows) {
+        if (pending.length >= 4) break
+        if (!row || !row.threadId || readCachedThread(row.threadId)) continue
+        pending.push(row.threadId)
+      }
+      if (!pending.length) return
+      const run = () => {
+        for (const threadId of pending) {
+          api(`/thread?id=${encodeURIComponent(threadId)}`)
+            .then((data) => cacheThread(threadId, data))
+            .catch(() => {})
+        }
+      }
+      // Let the list paint first.
+      if (typeof requestIdleCallback === 'function') requestIdleCallback(run, { timeout: 1500 })
+      else setTimeout(run, 150)
+    }
+
     function readCachedThread(threadId) {
       const hit = THREADS.find((entry) => entry.threadId === threadId)
       return hit ? hit.payload : null
@@ -838,6 +859,9 @@ window.__ModuleLoader__.load({
             openThread(wanted)
           }
           setStatus((current) => (current ? { ...current, configured: true } : current))
+          // Warm the visible conversations in the background so opening one is
+          // instant. Failures are ignored: the real fetch still runs on click.
+          if (!options.refreshOnly) prefetchThreads(rows)
         } catch (error) {
           if (error.status === 401) {
             setStatus((current) => (current ? { ...current, configured: false, source: 'none' } : current))

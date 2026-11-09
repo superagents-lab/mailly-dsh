@@ -941,3 +941,22 @@ test('returning to the page paints the cached list before Mailly answers', async
   for (const handle of intervals.splice(0)) clearInterval(handle)
 })
 
+
+test('the list warms the first conversations so opening one is instant', async () => {
+  const threads = []
+  globalThis.fetch = async (url) => {
+    const path = String(url)
+    threads.push(path)
+    if (path.endsWith('/status')) return ok({ ...STATUS_FILE, source: 'device', email: 'wang@example.com' })
+    if (path.includes('/threads?')) return ok(THREADS_PAYLOAD)
+    if (path.includes('/thread?id=')) return ok(threadPayload())
+    return fail(404, `unexpected ${path}`)
+  }
+  const { settle } = mountWorkbench()
+  await settle()
+  // The prefetch is scheduled off the first paint; give it a moment.
+  await new Promise((resolve) => setTimeout(resolve, 300))
+  await settle(4)
+  const prefetched = threads.filter((path) => path.includes('/thread?id=t1'))
+  assert.ok(prefetched.length >= 1, 'the visible conversation is fetched ahead of the click')
+})
