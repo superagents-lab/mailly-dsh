@@ -3170,30 +3170,22 @@ p{margin:0 0 .7em}
     }
 
     function pluginApply(ctx, current = pluginApply) {
-        // A reloaded bundle is a second module instance in the same page: the
-        // first instance already owns the slots, so hand the newest code to it
-        // rather than registering the page twice.
-        if (runtime.apply && runtime.apply !== pluginApply) {
-          // A reloaded bundle: the page keeps the first module instance, so
-          // hand it this module's page component. The page re-renders with the
-          // new code (styles included) and no slot is registered twice.
-          // Hand this module's code to the live page: the full inbox and the
-          // sidebar tab both re-render from the new bundle.
-          runtime.sidebarBody = MaillySidebarBody
-          if (typeof runtime.setPage === 'function') {
-            const live = runtime.ctx || ctx
-            const translate = runtime.translate || ((key) => key)
-            runtime.setPage(makePageComponent(live, translate))
-            bumpHosts()
-            return
+        // Every activation registers from scratch. A newer bundle may replace
+        // an older one while the older one's registrations are still live, so
+        // drop those first: they would otherwise shadow this activation or be
+        // removed later, taking the new entries with them.
+        if (runtime.apply && runtime.apply !== pluginApply && runtime.live) {
+          try {
+            runtime.cleanup?.()
+          } catch {
+            // The previous registrations are already gone.
           }
-          // No live page to hand to yet: register normally below.
         }
-        // The live module keeps the newest code for a later reload to use.
         runtime.current = pluginApply
         runtime.apply = pluginApply
         runtime.ctx = ctx
         runtime.sidebarBody = MaillySidebarBody
+        runtime.live = true
         // Prefer the locale service's own lookup (it knows every registered
         // pack); fall back to the bundled dictionaries.
         const bound = (() => {
@@ -3222,6 +3214,7 @@ p{margin:0 0 .7em}
 
         const disposers = []
         runtime.cleanup = () => {
+          runtime.live = false
           for (const dispose of disposers.splice(0)) {
             try {
               dispose()

@@ -1007,10 +1007,12 @@ test('the list warms the first conversations so opening one is instant', async (
   assert.ok(prefetched.length >= 1, 'the visible conversation is fetched ahead of the click')
 })
 
-test('a reloaded bundle hands its code to the page already running it', () => {
-  // The browser keeps the first module instance; a second load of the same
-  // bundle must not register the sidebar and page twice.
+test('a reloaded bundle replaces the live registrations instead of vanishing', () => {
+  // The page keeps the first module instance's registrations alive; a second
+  // load of the same bundle must dispose those and register its own, or the
+  // entry disappears until a restart.
   const before = registrations.length
+  const calls = []
   const second = []
   globalThis.window = { __ModuleLoader__: { load: (spec) => second.push(spec) } }
   new Function('window', read())(globalThis.window)
@@ -1019,7 +1021,6 @@ test('a reloaded bundle hands its code to the page already running it', () => {
     if (name === 'react') return React
     throw new Error(`unexpected require(${name})`)
   })
-  const calls = []
   reloaded.apply({
     locale: {
       register: () => () => {},
@@ -1038,11 +1039,19 @@ test('a reloaded bundle hands its code to the page already running it', () => {
     },
     get: () => undefined,
     on: () => () => {},
+    effect: (fn) => {
+      const dispose = fn()
+      return () => {
+        if (typeof dispose === 'function') dispose()
+      }
+    },
   })
-  assert.equal(registrations.length, before, 'the page is not registered a second time')
-  // The reloaded code does not touch the slots at all: it swaps the page the
-  // live host renders, so the entry survives and the page picks up new code.
-  assert.deepEqual(calls, [], 'no slot is registered a second time')
+  // The reloaded bundle registered its own entries.
+  assert.ok(calls.filter((entry) => entry === 'register').length >= 2, 'the reloaded bundle registers its slots')
+  assert.equal(registrations.length, before, 'the harness of the first instance is untouched')
+  // And the live module now points at the reloaded code.
+  const runtime = globalThis[Symbol.for('@mailly/dsh/client-runtime')]
+  assert.equal(typeof runtime.sidebarBody, 'function')
 })
 
 test('the hand-off button is readable in every theme', () => {
@@ -1059,36 +1068,31 @@ test('the hand-off button is readable in every theme', () => {
   assert.match(source, /className: 'ml-btn-agent',\s*\n\s*onClick: handToAgent/)
 })
 
-test('a reloaded bundle swaps the page the live host renders', () => {
-  // The live page points at a swappable component; a reload hands it a new
-  // one without registering any slot again.
+test('a reloaded bundle publishes its page and sidebar body to the live module', () => {
   const runtime = globalThis[Symbol.for('@mailly/dsh/client-runtime')]
-  assert.equal(typeof runtime.setPage, 'function', 'the live page exposes a swap point')
-  const swapped = []
-  const original = runtime.setPage
-  runtime.setPage = (next) => {
-    swapped.push(next)
-    original(next)
-  }
-  try {
-    const second = []
-    globalThis.window = { __ModuleLoader__: { load: (spec) => second.push(spec) } }
-    new Function('window', read())(globalThis.window)
-    const reloaded = second[0].factory((name) => {
-      if (name === 'react') return React
-      throw new Error(`unexpected require(${name})`)
-    })
-    reloaded.apply({
-      locale: { register: () => () => {}, bind: () => (key) => key, getLocale: () => ({ active: 'zh' }) },
-      slots: { inject: () => () => {}, register: () => () => {} },
-      get: () => undefined,
-      on: () => () => {},
-    })
-    assert.equal(swapped.length, 1, 'the reloaded code handed over its page')
-    assert.equal(swapped[0].name, 'MaillyPage')
-  } finally {
-    runtime.setPage = original
-  }
+  const second = []
+  globalThis.window = { __ModuleLoader__: { load: (spec) => second.push(spec) } }
+  new Function('window', read())(globalThis.window)
+  const reloaded = second[0].factory((name) => {
+    if (name === 'react') return React
+    throw new Error(`unexpected require(${name})`)
+  })
+  reloaded.apply({
+    locale: { register: () => () => {}, bind: () => (key) => key, getLocale: () => ({ active: 'zh' }) },
+    slots: { inject: () => () => {}, register: () => () => {} },
+    get: () => undefined,
+    on: () => () => {},
+    effect: (fn) => {
+      const dispose = fn()
+      return () => {
+        if (typeof dispose === 'function') dispose()
+      }
+    },
+  })
+  // Both hosts read from the runtime, so a mounted page picks up this bundle.
+  assert.equal(typeof runtime.setPage, 'function')
+  assert.equal(typeof runtime.sidebarBody, 'function')
+  assert.equal(typeof runtime.cleanup, 'function', 'the next activation can drop these registrations')
 })
 
 test('a message with authored HTML renders in a sandboxed frame', async () => {
@@ -1229,6 +1233,7 @@ test('the hand-off prompt keeps the newest messages when it must cut', () => {
 })
 
 test('handing a conversation to the agent sends the whole thread', async () => {
+  plugin.testHelpers.resetSessions()
   const calls = []
   globalThis.fetch = async (url, options = {}) => {
     const path = String(url)
