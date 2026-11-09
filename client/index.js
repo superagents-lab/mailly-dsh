@@ -822,6 +822,8 @@ window.__ModuleLoader__.load({
         setNotice('')
         try {
           const data = await api(`/thread?id=${encodeURIComponent(threadId)}`)
+          // A background prefetch may have answered first; the reader's own
+          // answer is authoritative and always replaces it.
           threadRef.current = data
           setThread(data)
           cacheThread(threadId, data)

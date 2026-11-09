@@ -752,6 +752,7 @@ test('a draft that changed after review is refused and re-shown', async () => {
     draftAfterOpen: { id: 'd1', revision: 4, status: 'pending', text: '改过的正文' },
     noPrefetch: true,
   })
+  assert.equal(globalThis.__MAILLY_NO_PREFETCH, true, 'the warm-up must be off for this test')
   const { settle } = mountWorkbench()
   const stopTimers = () => {
     for (const handle of intervals.splice(0)) clearInterval(handle)
