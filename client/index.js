@@ -1447,6 +1447,8 @@ p{margin:0 0 .7em}
           const handle = setTimeout(run, delay)
           frameTimers.current.push(handle)
         }
+        // A long session reads many bodies; keep the bag bounded.
+        if (frameTimers.current.length > 240) frameTimers.current.splice(0, frameTimers.current.length - 240)
       }
 
       const renderBody = (message) => {
