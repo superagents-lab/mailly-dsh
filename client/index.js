@@ -62,6 +62,9 @@ window.__ModuleLoader__.load({
       sbHandOffFailed: 'Could not reach the agent.',
       sbNoSession: 'This tab needs an open conversation.',
       sbOpenInbox: 'Open the full inbox',
+      tabDescription: 'Read this conversation\'s Mailly thread and draft a reply',
+      sbInserted: 'Prompt inserted in the composer — review it, then press Enter.',
+      sbQueued: 'Prompt queued for the agent in this conversation.',
       emailFrameTitle: 'Email body',
       setupTitle: 'Connect Mailly',
       changeKey: 'Change key',
@@ -175,6 +178,9 @@ window.__ModuleLoader__.load({
       sbHandOffFailed: '没能连上 agent。',
       sbNoSession: '这个标签页需要一个已打开的会话。',
       sbOpenInbox: '打开完整收件箱',
+      tabDescription: '在当前会话旁阅读 Mailly 邮件并起草回复',
+      sbInserted: '已插入输入框，检查后按回车发送。',
+      sbQueued: '已排入当前会话，agent 会接着处理。',
       emailFrameTitle: '邮件正文',
       setupTitle: '连接 Mailly',
       changeKey: '更换凭据',
@@ -2216,54 +2222,156 @@ p{margin:0 0 .7em}
     const TAB_ID = '@mailly/dsh'
     const TAB_KIND = 'mailly'
 
+    // The tab's design system: one narrow column, DSH tokens only, so it reads
+    // as part of the app rather than a page inside it.
     const SIDEBAR_CSS = `
-.ml-sb{display:flex;flex-direction:column;height:100%;min-height:0;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-primary)}
-.ml-sb-bar{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--dsw-alias-border-l1)}
-.ml-sb-bar .ml-input{flex:1 1 auto;min-width:0;height:28px}
+.ml-sb{display:flex;flex-direction:column;height:100%;min-height:0;background:var(--dsw-alias-bg-base);color:var(--dsw-alias-label-primary);font-size:13px;line-height:1.5}
+.ml-sb *{box-sizing:border-box}
+
+/* toolbar */
+.ml-sb-top{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:10px 12px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.ml-sb-field{flex:1 1 auto;min-width:0;display:flex;align-items:center;gap:6px;height:30px;padding:0 9px;border-radius:9px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary)}
+.ml-sb-field:focus-within{border-color:var(--dsw-alias-brand-primary);color:var(--dsw-alias-label-primary)}
+.ml-sb-field input{flex:1 1 auto;min-width:0;border:0;background:transparent;color:inherit;font:inherit;outline:none;padding:0}
+.ml-sb-iconbtn{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;padding:0;border-radius:9px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);cursor:pointer}
+.ml-sb-iconbtn:hover{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-border-l2)}
+.ml-sb-iconbtn:disabled{opacity:.5;cursor:default}
+.ml-sb-iconbtn-flat{border-color:transparent;background:transparent}
+.ml-sb-iconbtn-flat:hover{background:var(--dsw-alias-bg-layer-2)}
+
+/* list */
 .ml-sb-list{flex:1 1 auto;min-height:0;overflow-y:auto}
-.ml-sb-row{display:block;width:100%;text-align:left;padding:9px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:inherit;font:inherit;cursor:pointer}
-.ml-sb-row:hover{background:var(--dsw-alias-bg-layer-2)}
-.ml-sb-row-top{display:flex;gap:8px;align-items:baseline;justify-content:space-between;font-size:11px;color:var(--dsw-alias-label-secondary)}
-.ml-sb-from{font-weight:600;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%}
-.ml-sb-subject{font-weight:600;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ml-sb-snippet{color:var(--dsw-alias-label-secondary);font-size:11.5px;margin-top:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
+.ml-sb-row{display:flex;gap:10px;width:100%;text-align:left;padding:10px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:inherit;font:inherit;cursor:pointer;position:relative}
+.ml-sb-row:hover{background:var(--dsw-alias-bg-layer-1)}
+.ml-sb-row:focus-visible{outline:2px solid var(--dsw-alias-brand-primary);outline-offset:-2px}
+.ml-sb-row-unread .ml-sb-name{font-weight:600}
+.ml-sb-avatar{flex:0 0 auto;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;letter-spacing:.02em;background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l1);text-transform:uppercase}
+.ml-sb-row-unread .ml-sb-avatar{background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-bg-base);border-color:transparent}
+.ml-sb-row-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:1px}
+.ml-sb-row-line{display:flex;align-items:baseline;gap:8px}
+.ml-sb-name{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+.ml-sb-when{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
+.ml-sb-subject{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px;color:var(--dsw-alias-label-secondary)}
+.ml-sb-row-unread .ml-sb-subject{color:var(--dsw-alias-label-primary);font-weight:600}
+.ml-sb-snippet{overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;font-size:11.5px;color:var(--dsw-alias-label-secondary)}
+.ml-sb-dot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:var(--dsw-alias-brand-primary);align-self:center}
+
+/* skeletons and empty states */
+.ml-sb-skel{height:10px;border-radius:5px;background:var(--dsw-alias-bg-layer-2);animation:ml-sb-pulse 1.4s ease-in-out infinite}
+.ml-sb-skel-row{display:flex;gap:10px;padding:12px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.ml-sb-skel-col{flex:1 1 auto;display:flex;flex-direction:column;gap:6px}
+@keyframes ml-sb-pulse{0%,100%{opacity:.45}50%{opacity:.9}}
+.ml-sb-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;padding:40px 24px;text-align:center;color:var(--dsw-alias-label-secondary);font-size:12.5px}
+.ml-sb-empty-icon{width:36px;height:36px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}
+
+/* reader */
 .ml-sb-reader{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
-.ml-sb-head{flex:0 0 auto;padding:8px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);display:flex;flex-direction:column;gap:4px}
-.ml-sb-title{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.ml-sb-meta{font-size:11px;color:var(--dsw-alias-label-secondary);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.ml-sb-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px}
-.ml-sb-msg{border:1px solid var(--dsw-alias-border-l1);border-radius:9px;padding:9px 10px;margin-bottom:8px;background:var(--dsw-alias-bg-layer-1)}
+.ml-sb-head{flex:0 0 auto;padding:8px 12px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);display:flex;flex-direction:column;gap:6px}
+.ml-sb-crumbs{display:flex;align-items:center;gap:6px}
+.ml-sb-back{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 8px 0 6px;border-radius:8px;border:1px solid transparent;background:transparent;color:var(--dsw-alias-label-secondary);font:inherit;font-size:12px;cursor:pointer}
+.ml-sb-back:hover{background:var(--dsw-alias-bg-layer-2);color:var(--dsw-alias-label-primary)}
+.ml-sb-title{font-size:13.5px;font-weight:600;line-height:1.35;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;word-break:break-word}
+.ml-sb-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.ml-sb-chip{display:inline-flex;align-items:center;gap:4px;height:20px;padding:0 7px;border-radius:6px;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);font-size:11px;color:var(--dsw-alias-label-secondary)}
+.ml-sb-chip-warn{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary)}
+.ml-sb-toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding-top:2px}
+.ml-sb-primary{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:9px;border:1px solid var(--dsw-alias-brand-primary);background:var(--dsw-alias-brand-primary);color:var(--dsw-alias-bg-base);font:inherit;font-size:12.5px;font-weight:600;cursor:pointer}
+.ml-sb-primary:hover{filter:brightness(1.08)}
+.ml-sb-primary:disabled{opacity:.55;cursor:default;filter:none}
+.ml-sb-secondary{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:9px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;cursor:pointer}
+.ml-sb-secondary:hover{border-color:var(--dsw-alias-border-l2)}
+.ml-sb-secondary:disabled{opacity:.55;cursor:default}
+.ml-sb-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px}
+
+/* messages */
+.ml-sb-msg{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;padding:10px 11px;margin-bottom:10px;background:var(--dsw-alias-bg-layer-1)}
 .ml-sb-msg-out{border-style:dashed;background:var(--dsw-alias-bg-layer-2)}
-.ml-sb-msg-head{display:flex;gap:6px;flex-wrap:wrap;align-items:baseline;font-size:11px;color:var(--dsw-alias-label-secondary);margin-bottom:5px}
-.ml-sb-msg-from{font-weight:600;color:var(--dsw-alias-label-primary)}
-.ml-sb-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.ml-sb-note{font-size:11.5px;color:var(--dsw-alias-label-secondary);padding:6px 0}
-.ml-sb-error{font-size:11.5px;color:var(--dsw-alias-state-error-primary);padding:4px 0}
-.ml-sb-ok{font-size:11.5px;color:var(--dsw-alias-state-success-primary);padding:4px 0}
-.ml-sb-draft{border:1px solid var(--dsw-alias-border-l2);border-radius:9px;padding:9px 10px;margin-bottom:8px;background:var(--dsw-alias-bg-layer-2)}
-.ml-sb-draft-head{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--dsw-alias-label-secondary)}
-.ml-sb-draft-body{white-space:pre-wrap;word-break:break-word;font-size:12.5px;margin:5px 0}
-.ml-sb-review{border:1px solid var(--dsw-alias-brand-primary);border-radius:9px;padding:9px 10px;margin-bottom:8px;display:flex;flex-direction:column;gap:6px}
-.ml-sb-review-text{white-space:pre-wrap;word-break:break-word;font-size:12.5px;background:var(--dsw-alias-bg-base);border-radius:7px;padding:8px;max-height:200px;overflow:auto}
-.ml-sb-check{display:flex;gap:6px;align-items:flex-start;font-size:11.5px;color:var(--dsw-alias-label-secondary);cursor:pointer}
-.ml-sb-compose{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-top:1px solid var(--dsw-alias-border-l1)}
-.ml-sb-compose textarea{width:100%;box-sizing:border-box;min-height:84px;resize:vertical;padding:8px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:inherit;font:inherit;font-size:12.5px;line-height:1.5;outline:none}
+.ml-sb-msg-head{display:flex;align-items:center;gap:8px;margin-bottom:7px}
+.ml-sb-msg-who{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
+.ml-sb-msg-name{font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ml-sb-msg-meta{font-size:11px;color:var(--dsw-alias-label-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ml-sb-msg-time{flex:0 0 auto;font-size:11px;color:var(--dsw-alias-label-secondary);font-variant-numeric:tabular-nums}
+
+/* drafts */
+.ml-sb-section{display:flex;align-items:center;gap:6px;margin:14px 0 8px;font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--dsw-alias-label-secondary)}
+.ml-sb-draft{border:1px solid var(--dsw-alias-border-l2);border-radius:11px;padding:10px 11px;margin-bottom:10px;background:var(--dsw-alias-bg-layer-2)}
+.ml-sb-draft-head{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.ml-sb-pill{display:inline-flex;align-items:center;height:18px;padding:0 7px;border-radius:999px;font-size:10.5px;font-weight:600;letter-spacing:.02em;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);color:var(--dsw-alias-label-secondary)}
+.ml-sb-pill-pending{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary)}
+.ml-sb-pill-sent{color:var(--dsw-alias-state-success-primary);border-color:var(--dsw-alias-state-success-primary)}
+.ml-sb-draft-body{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.55;margin:7px 0;max-height:180px;overflow:auto}
+.ml-sb-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+
+/* review + compose */
+.ml-sb-review{border:1px solid var(--dsw-alias-brand-primary);border-radius:11px;padding:10px;display:flex;flex-direction:column;gap:8px;background:var(--dsw-alias-bg-base)}
+.ml-sb-review-text{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.55;background:var(--dsw-alias-bg-layer-1);border:1px solid var(--dsw-alias-border-l1);border-radius:8px;padding:9px;max-height:220px;overflow:auto}
+.ml-sb-check{display:flex;align-items:flex-start;gap:7px;font-size:11.5px;color:var(--dsw-alias-label-secondary);cursor:pointer;line-height:1.4}
+.ml-sb-check input{margin:2px 0 0;flex:0 0 auto}
+.ml-sb-compose{display:flex;flex-direction:column;gap:8px;padding:10px 12px;border-top:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}
+.ml-sb-compose textarea{width:100%;min-height:96px;resize:vertical;padding:9px 10px;border-radius:9px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:inherit;font:inherit;font-size:12.5px;line-height:1.55;outline:none}
 .ml-sb-compose textarea:focus{border-color:var(--dsw-alias-brand-primary)}
+
+/* notices and setup */
+.ml-sb-banner{display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-radius:9px;font-size:11.5px;line-height:1.45;margin-bottom:10px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary)}
+.ml-sb-banner-ok{border-color:var(--dsw-alias-state-success-primary);color:var(--dsw-alias-state-success-primary)}
+.ml-sb-banner-error{border-color:var(--dsw-alias-state-error-primary);color:var(--dsw-alias-state-error-primary)}
+.ml-sb-setup{margin:16px 12px;padding:16px;border:1px solid var(--dsw-alias-border-l1);border-radius:12px;background:var(--dsw-alias-bg-layer-1);display:flex;flex-direction:column;gap:10px}
+.ml-sb-setup-title{font-size:13px;font-weight:600}
+.ml-sb-setup-body{font-size:12px;color:var(--dsw-alias-label-secondary);line-height:1.55}
+.ml-sb-link{color:var(--dsw-alias-brand-primary);text-decoration:none;font-size:12px}
+.ml-sb-link:hover{text-decoration:underline}
 `
 
-    function sidebarErrorMessage(error) {
-      return error && error.message ? error.message : String(error)
+    /** Small line icons for the tab chrome. */
+    function SbIcon(props) {
+      const name = props && props.name
+      const size = (props && props.size) || 14
+      const paths = {
+        search: 'M11 11l3 3M7.5 12.5a5 5 0 1 0 0-10 5 5 0 0 0 0 10z',
+        refresh: 'M13.5 6.5A5.5 5.5 0 1 0 14 10M13.5 3v3.5H10',
+        back: 'M9.5 4 5 8.5 9.5 13',
+        send: 'M3 8.5 13 4l-4 9-1.6-3.4L3 8.5z',
+        draft: 'M4 12.5V4h6l2 2v6.5H4zM10 4v2h2',
+        mail: 'M2.5 4.5h11v7h-11zM3 5l5 3.5L13 5',
+        inbox: 'M2.5 9.5h3l1 2h3l1-2h3v3h-11zM2.5 9.5 5 4h6l2.5 5.5',
+      }
+      return h(
+        'svg',
+        {
+          width: size,
+          height: size,
+          viewBox: '0 0 16 16',
+          fill: 'none',
+          stroke: 'currentColor',
+          strokeWidth: 1.5,
+          strokeLinecap: 'round',
+          strokeLinejoin: 'round',
+          'aria-hidden': true,
+          style: { display: 'block', flex: '0 0 auto' },
+        },
+        h('path', { d: paths[name] || paths.mail }),
+      )
     }
 
-    /** The Mailly tab: list drills into a reader, all inside one column. */
+    /** Initials for a list avatar. */
+    function avatarInitials(name, address) {
+      const source = String(name || address || '?').trim()
+      if (!source) return '?'
+      const words = source.split(/\s+/).filter(Boolean)
+      if (words.length >= 2) return `${words[0][0]}${words[1][0]}`
+      return source.slice(0, 2)
+    }
+
+    /** The Mailly tab: a list that drills into a reader, in one column. */
     function MaillySidebarBody(props) {
       const t = typeof props?.translate === 'function' ? props.translate : (key) => key
       const sessionId = props?.sessionId || ''
+      const inputActions = props?.inputActions
       const locale = typeof props?.getLocale === 'function' ? props.getLocale() : 'zh'
 
       const [status, setStatus] = useState(null)
       const [threads, setThreads] = useState([])
-      const [listLoading, setListLoading] = useState(false)
+      const [listLoading, setListLoading] = useState(true)
       const [listError, setListError] = useState('')
       const [query, setQuery] = useState('')
       const [openId, setOpenId] = useState('')
@@ -2274,7 +2382,7 @@ p{margin:0 0 .7em}
       const [draftText, setDraftText] = useState('')
       const [busy, setBusy] = useState(false)
       const [notice, setNotice] = useState('')
-      const [noticeOk, setNoticeOk] = useState(false)
+      const [noticeKind, setNoticeKind] = useState('info')
       const [sending, setSending] = useState(null)
       const [sendError, setSendError] = useState('')
       const [emailImages, setEmailImages] = useState({})
@@ -2287,6 +2395,11 @@ p{margin:0 0 .7em}
           for (const handle of frameTimers.current.splice(0)) clearTimeout(handle)
         }
       }, [])
+
+      const say = (text, kind) => {
+        setNotice(text || '')
+        setNoticeKind(kind || 'info')
+      }
 
       const loadThreads = useCallback(async (search) => {
         const text = typeof search === 'string' ? search : queryRef.current
@@ -2315,8 +2428,12 @@ p{margin:0 0 .7em}
             if (cancelled) return
             setStatus(data)
             if (data.configured) await loadThreads('')
+            else setListLoading(false)
           } catch (error) {
-            if (!cancelled) setListError(sidebarErrorMessage(error))
+            if (!cancelled) {
+              setListError(sidebarErrorMessage(error))
+              setListLoading(false)
+            }
           }
         })()
         return () => {
@@ -2337,9 +2454,9 @@ p{margin:0 0 .7em}
         setThreadError('')
         setComposeOpen(false)
         setDraftText('')
-        setNotice('')
         setSending(null)
         setSendError('')
+        say('')
         try {
           const data = await api(`/thread?id=${encodeURIComponent(threadId)}`)
           setThread(data)
@@ -2356,9 +2473,9 @@ p{margin:0 0 .7em}
         setThreadError('')
         setComposeOpen(false)
         setDraftText('')
-        setNotice('')
         setSending(null)
         setSendError('')
+        say('')
       }, [])
 
       const measure = (key, frame) => {
@@ -2397,8 +2514,7 @@ p{margin:0 0 .7em}
                 'button',
                 {
                   className: 'ml-btn ml-btn-ghost ml-msg-images',
-                  onClick: () =>
-                    setEmailImages((current) => ({ ...current, [key]: allowImages ? false : true })),
+                  onClick: () => setEmailImages((current) => ({ ...current, [key]: !allowImages })),
                 },
                 allowImages ? t('hideImages') : t('showImages'),
               )
@@ -2411,17 +2527,15 @@ p{margin:0 0 .7em}
         const anchor = anchorMessageOf(thread) || messages[messages.length - 1]
         if (!anchor || !anchor.id || !draftText.trim()) return
         setBusy(true)
-        setNotice('')
+        say('')
         try {
           await api('/drafts', { method: 'POST', body: { anchor_email_id: anchor.id, text: draftText } })
           setDraftText('')
           setComposeOpen(false)
           if (thread) await openThread(thread.threadId)
-          setNoticeOk(true)
-          setNotice(t('draftSaved'))
+          say(t('draftSaved'), 'ok')
         } catch (error) {
-          setNoticeOk(false)
-          setNotice(sidebarErrorMessage(error))
+          say(sidebarErrorMessage(error), 'error')
         } finally {
           setBusy(false)
         }
@@ -2444,8 +2558,7 @@ p{margin:0 0 .7em}
           if (!draftMatches(shown, current)) {
             setThread(fresh)
             setSending(null)
-            setNoticeOk(false)
-            setNotice(t(current ? 'sendChanged' : 'draftNotPending'))
+            say(t(current ? 'sendChanged' : 'draftNotPending'), 'error')
             return
           }
           try {
@@ -2457,14 +2570,12 @@ p{margin:0 0 .7em}
             const key = sendErrorKey(error)
             setSending(null)
             await openThread(thread.threadId)
-            setNoticeOk(false)
-            setNotice(key ? t(key) : fill(t('sendFailed'), { error: sidebarErrorMessage(error) }))
+            say(key ? t(key) : fill(t('sendFailed'), { error: sidebarErrorMessage(error) }), 'error')
             return
           }
           setSending(null)
           await openThread(thread.threadId)
-          setNoticeOk(true)
-          setNotice(t('sendDone'))
+          say(t('sendDone'), 'ok')
         } finally {
           setBusy(false)
         }
@@ -2480,11 +2591,9 @@ p{margin:0 0 .7em}
               body: { revision: draft.revision },
             })
             await openThread(thread.threadId)
-            setNoticeOk(false)
-            setNotice(t('discardDone'))
+            say(t('discardDone'), 'ok')
           } catch (error) {
-            setNoticeOk(false)
-            setNotice(error && error.status === 409 ? t('discardChanged') : sidebarErrorMessage(error))
+            say(error && error.status === 409 ? t('discardChanged') : sidebarErrorMessage(error), 'error')
           } finally {
             setBusy(false)
           }
@@ -2492,168 +2601,244 @@ p{margin:0 0 .7em}
         [thread, openThread, t],
       )
 
-      // The conversation is right here, so the hand-off queues its prompt into
-      // this Session instead of opening another one.
+      // The conversation is right here, so the hand-off goes into the composer
+      // for review; queueing it into the Session is only the fallback.
       const handOff = useCallback(async () => {
-        if (!thread || !sessionId) return
+        if (!thread || busy) return
+        const prompt = buildMailPrompt(thread, t)
+        let inserted = false
+        if (inputActions && typeof inputActions.insertQuote === 'function') {
+          try {
+            inserted = inputActions.insertQuote(prompt) !== false
+          } catch {
+            inserted = false
+          }
+        }
+        if (inserted) {
+          say(t('sbInserted'), 'ok')
+          return
+        }
+        if (!sessionId) {
+          say(t('sbNoSession'), 'error')
+          return
+        }
         setBusy(true)
-        setNotice('')
         try {
           await api('/agent/prompt', {
             method: 'POST',
-            body: { session_id: sessionId, text: buildMailPrompt(thread, t) },
+            body: { session_id: sessionId, text: prompt },
           })
-          setNoticeOk(true)
-          setNotice(t('sbHandedOff'))
-        } catch (error) {
-          setNoticeOk(false)
-          setNotice(t('sbHandOffFailed'))
+          say(t('sbQueued'), 'ok')
+        } catch {
+          say(t('sbHandOffFailed'), 'error')
         } finally {
           setBusy(false)
         }
-      }, [thread, sessionId, t])
+      }, [thread, busy, inputActions, sessionId, t])
 
-      if (!status || !status.configured) {
+      const banner = notice
+        ? h(
+            'div',
+            {
+              className: `ml-sb-banner${noticeKind === 'ok' ? ' ml-sb-banner-ok' : noticeKind === 'error' ? ' ml-sb-banner-error' : ''}`,
+            },
+            h('span', null, notice),
+          )
+        : null
+
+      // --- not connected ---------------------------------------------------
+      if (status && !status.configured) {
         return h(
           'div',
           { className: 'ml-sb' },
           h('style', null, SIDEBAR_CSS),
           h(
             'div',
-            { className: 'ml-sb-scroll' },
-            h('div', { className: 'ml-sb-note' }, t('setupBody')),
+            { className: 'ml-sb-setup' },
+            h('div', { className: 'ml-sb-setup-title' }, t('setupTitle')),
+            h('div', { className: 'ml-sb-setup-body' }, t('setupBody')),
             h(
-              'button',
+              'a',
               {
-                className: 'ml-btn ml-btn-primary',
-                onClick: () => {
-                  try {
-                    const layout = props?.openInbox
-                    if (typeof layout === 'function') layout()
-                  } catch {
-                    // The main panel is optional.
-                  }
-                },
+                className: 'ml-sb-link',
+                href: 'https://mailly.site/app/developers',
+                target: '_blank',
+                rel: 'noreferrer',
               },
-              t('sbOpenInbox'),
+              t('setupWhere'),
             ),
           ),
         )
       }
 
+      // --- list ------------------------------------------------------------
+      const skeletons = h(
+        'div',
+        null,
+        [0, 1, 2, 3].map((index) =>
+          h(
+            'div',
+            { key: index, className: 'ml-sb-skel-row' },
+            h('div', { className: 'ml-sb-skel', style: { width: '28px', height: '28px', borderRadius: '50%' } }),
+            h(
+              'div',
+              { className: 'ml-sb-skel-col' },
+              h('div', { className: 'ml-sb-skel', style: { width: '55%' } }),
+              h('div', { className: 'ml-sb-skel', style: { width: '80%' } }),
+              h('div', { className: 'ml-sb-skel', style: { width: '65%' } }),
+            ),
+          ),
+        ),
+      )
+
       const list = h(
         'div',
         { className: 'ml-sb-list' },
-        !threads.length && !listLoading ? h('div', { className: 'ml-sb-note' }, t('sbEmptyList')) : null,
-        threads.map((row) =>
-          h(
+        listLoading && !threads.length ? skeletons : null,
+        !listLoading && !threads.length && !listError
+          ? h(
+              'div',
+              { className: 'ml-sb-empty' },
+              h('div', { className: 'ml-sb-empty-icon' }, h(SbIcon, { name: 'inbox', size: 18 })),
+              h('div', null, t('sbEmptyList')),
+            )
+          : null,
+        threads.map((row) => {
+          const latest = row.latest || {}
+          const unread = Number(row.unreadCount) > 0
+          return h(
             'button',
-            { key: row.threadId, className: 'ml-sb-row', onClick: () => openThread(row.threadId) },
+            {
+              key: row.threadId,
+              className: `ml-sb-row${unread ? ' ml-sb-row-unread' : ''}`,
+              onClick: () => openThread(row.threadId),
+            },
+            h('div', { className: 'ml-sb-avatar', 'aria-hidden': true }, avatarInitials(latest.fromName, latest.fromAddress)),
             h(
               'div',
-              { className: 'ml-sb-row-top' },
+              { className: 'ml-sb-row-main' },
               h(
-                'span',
-                { className: 'ml-sb-from' },
-                row.unreadCount ? h('span', { className: 'ml-dot', 'aria-hidden': true }) : null,
-                senderLabel(row.latest),
+                'div',
+                { className: 'ml-sb-row-line' },
+                h('span', { className: 'ml-sb-name' }, senderLabel(latest) || '(unknown)'),
+                h('span', { className: 'ml-sb-when' }, formatWhen(row.lastReceivedAt, locale)),
               ),
-              h('span', null, formatWhen(row.lastReceivedAt, locale)),
+              h('div', { className: 'ml-sb-subject' }, latest.subject || '(no subject)'),
+              h('div', { className: 'ml-sb-snippet' }, latest.snippet || ''),
             ),
-            h('div', { className: 'ml-sb-subject' }, (row.latest && row.latest.subject) || '(no subject)'),
-            h('div', { className: 'ml-sb-snippet' }, (row.latest && row.latest.snippet) || ''),
-          ),
-        ),
-        listLoading ? h('div', { className: 'ml-sb-note' }, t('loading')) : null,
-        listError ? h('div', { className: 'ml-sb-error' }, listError) : null,
+            unread ? h('span', { className: 'ml-sb-dot', 'aria-hidden': true }) : null,
+          )
+        }),
+        listError ? h('div', { className: 'ml-sb-empty' }, h('div', null, listError)) : null,
       )
 
+      // --- reader ----------------------------------------------------------
       const reader = (() => {
-        if (threadLoading) return h('div', { className: 'ml-sb-scroll' }, h('div', { className: 'ml-sb-note' }, t('loading')))
-        if (threadError) return h('div', { className: 'ml-sb-scroll' }, h('div', { className: 'ml-sb-error' }, threadError))
-        if (!thread) return h('div', { className: 'ml-sb-scroll' }, h('div', { className: 'ml-sb-note' }, t('sbEmptyReader')))
+        const head = h(
+          'div',
+          { className: 'ml-sb-head' },
+          h(
+            'div',
+            { className: 'ml-sb-crumbs' },
+            h(
+              'button',
+              { className: 'ml-sb-back', onClick: closeThread },
+              h(SbIcon, { name: 'back' }),
+              t('sbBack'),
+            ),
+          ),
+          thread ? h('div', { className: 'ml-sb-title' }, (thread.messages?.[0]?.subject) || '(no subject)') : null,
+          thread
+            ? h(
+                'div',
+                { className: 'ml-sb-chips' },
+                h(
+                  'span',
+                  { className: 'ml-sb-chip' },
+                  h(SbIcon, { name: 'mail', size: 11 }),
+                  `${(thread.messages || []).length} ${t('messages')}`,
+                ),
+                thread.olderMessagesOmitted
+                  ? h('span', { className: 'ml-sb-chip ml-sb-chip-warn' }, t('messageOmitted'))
+                  : null,
+                (thread.drafts || []).length
+                  ? h('span', { className: 'ml-sb-chip' }, `${t('savedDrafts')} ${thread.drafts.length}`)
+                  : null,
+              )
+            : null,
+          thread
+            ? h(
+                'div',
+                { className: 'ml-sb-toolbar' },
+                h(
+                  'button',
+                  { className: 'ml-sb-primary', onClick: handOff, disabled: busy },
+                  h(SbIcon, { name: 'send' }),
+                  t('sbHandOff'),
+                ),
+                h(
+                  'button',
+                  {
+                    className: 'ml-sb-secondary',
+                    onClick: () => {
+                      setComposeOpen((open) => !open)
+                      say('')
+                    },
+                  },
+                  h(SbIcon, { name: 'draft' }),
+                  t('compose'),
+                ),
+              )
+            : null,
+        )
+
+        if (threadLoading) {
+          return h(
+            'div',
+            { className: 'ml-sb-reader' },
+            head,
+            h('div', { className: 'ml-sb-scroll' }, skeletons),
+          )
+        }
+        if (threadError) {
+          return h(
+            'div',
+            { className: 'ml-sb-reader' },
+            head,
+            h(
+              'div',
+              { className: 'ml-sb-empty' },
+              h('div', { className: 'ml-sb-empty-icon' }, h(SbIcon, { name: 'mail', size: 18 })),
+              h('div', null, t('sbLoadFailed')),
+              h('div', { style: { fontSize: '11px' } }, threadError),
+            ),
+          )
+        }
+        if (!thread) {
+          return h(
+            'div',
+            { className: 'ml-sb-reader' },
+            head,
+            h(
+              'div',
+              { className: 'ml-sb-empty' },
+              h('div', { className: 'ml-sb-empty-icon' }, h(SbIcon, { name: 'mail', size: 18 })),
+              h('div', null, t('sbEmptyReader')),
+            ),
+          )
+        }
 
         const messages = Array.isArray(thread.messages) ? thread.messages : []
         const drafts = Array.isArray(thread.drafts) ? thread.drafts : []
-        const subject = (messages.length && messages[0].subject) || ''
 
         return h(
           'div',
           { className: 'ml-sb-reader' },
-          h(
-            'div',
-            { className: 'ml-sb-head' },
-            h(
-              'div',
-              { className: 'ml-sb-actions' },
-              h('button', { className: 'ml-btn ml-btn-ghost', onClick: closeThread }, `← ${t('sbBack')}`),
-            ),
-            h('div', { className: 'ml-sb-title', title: subject }, subject || '(no subject)'),
-            h(
-              'div',
-              { className: 'ml-sb-meta' },
-              h('span', null, `${messages.length} ${t('messages')}`),
-              thread.olderMessagesOmitted ? h('span', { className: 'ml-badge' }, t('messageOmitted')) : null,
-            ),
-            h(
-              'div',
-              { className: 'ml-sb-actions' },
-              h(
-                'button',
-                { className: 'ml-btn-agent', onClick: handOff, disabled: busy || !sessionId },
-                h(MaillyIcon, { size: 13 }),
-                t('sbHandOff'),
-              ),
-              h(
-                'button',
-                {
-                  className: 'ml-btn',
-                  onClick: () => {
-                    setComposeOpen((open) => !open)
-                    setNotice('')
-                  },
-                },
-                t('compose'),
-              ),
-            ),
-          ),
+          head,
           h(
             'div',
             { className: 'ml-sb-scroll' },
-            notice ? h('div', { className: noticeOk ? 'ml-sb-ok' : 'ml-sb-note' }, notice) : null,
-            composeOpen
-              ? h(
-                  'div',
-                  { className: 'ml-sb-compose' },
-                  h('div', { className: 'ml-sb-note' }, t('composeHint')),
-                  h('textarea', {
-                    value: draftText,
-                    placeholder: t('composePlaceholder'),
-                    onChange: (event) => setDraftText(event.target.value),
-                    'aria-label': t('composePlaceholder'),
-                  }),
-                  h(
-                    'div',
-                    { className: 'ml-sb-actions' },
-                    h(
-                      'button',
-                      { className: 'ml-btn ml-btn-primary', disabled: busy || !draftText.trim(), onClick: saveDraft },
-                      busy ? t('loading') : t('saveDraft'),
-                    ),
-                    h(
-                      'button',
-                      {
-                        className: 'ml-btn ml-btn-ghost',
-                        onClick: () => {
-                          setComposeOpen(false)
-                          setDraftText('')
-                        },
-                      },
-                      t('cancel'),
-                    ),
-                  ),
-                )
-              : null,
+            banner,
             messages.map((message) =>
               h(
                 'section',
@@ -2665,16 +2850,25 @@ p{margin:0 0 .7em}
                   'div',
                   { className: 'ml-sb-msg-head' },
                   h(
-                    'span',
-                    { className: 'ml-sb-msg-from' },
-                    message.direction === 'outbound'
-                      ? senderLabel(message) || 'you'
-                      : message.fromName || message.fromAddress || 'unknown',
+                    'div',
+                    { className: 'ml-sb-avatar', 'aria-hidden': true },
+                    avatarInitials(message.fromName, message.fromAddress),
                   ),
-                  h('span', null, formatWhen(message.receivedAt, locale)),
-                  Array.isArray(message.attachments) && message.attachments.length
-                    ? h('span', { className: 'ml-badge' }, `${message.attachments.length}`)
-                    : null,
+                  h(
+                    'div',
+                    { className: 'ml-sb-msg-who' },
+                    h(
+                      'div',
+                      { className: 'ml-sb-msg-name' },
+                      message.direction === 'outbound'
+                        ? `${t('promptMe')} → ${message.toAddress || ''}`
+                        : message.fromName || message.fromAddress || 'unknown',
+                    ),
+                    message.direction === 'outbound' && message.fromAddress
+                      ? h('div', { className: 'ml-sb-msg-meta' }, message.fromAddress)
+                      : null,
+                  ),
+                  h('div', { className: 'ml-sb-msg-time' }, formatWhen(message.receivedAt, locale)),
                 ),
                 renderBody(message),
               ),
@@ -2683,25 +2877,31 @@ p{margin:0 0 .7em}
               ? h(
                   'div',
                   null,
-                  h('div', { className: 'ml-section-title' }, t('savedDrafts')),
+                  h('div', { className: 'ml-sb-section' }, t('savedDrafts')),
                   drafts.map((draft) => {
                     const pending = (draft.status || 'pending') === 'pending'
                     const reviewing = sending && String(sending.id) === String(draft.id)
+                    const pillClass =
+                      draft.status === 'sent'
+                        ? 'ml-sb-pill ml-sb-pill-sent'
+                        : pending
+                          ? 'ml-sb-pill ml-sb-pill-pending'
+                          : 'ml-sb-pill'
                     return h(
                       'div',
                       { key: draft.id || String(draft.revision), className: 'ml-sb-draft' },
                       h(
                         'div',
                         { className: 'ml-sb-draft-head' },
-                        h('span', null, `${draft.id || 'draft'} · r${draft.revision ?? '?'}`),
-                        h('span', { className: 'ml-badge' }, draft.status || 'pending'),
+                        h('span', { className: pillClass }, draft.status || 'pending'),
+                        h('span', null, `r${draft.revision ?? '?'}`),
                       ),
                       h('div', { className: 'ml-sb-draft-body' }, draft.text || ''),
                       reviewing
                         ? h(
                             'div',
                             { className: 'ml-sb-review' },
-                            h('div', { className: 'ml-sb-note' }, t('composeHint')),
+                            h('div', { className: 'ml-sb-draft-head' }, h('span', null, t('composeHint'))),
                             h('div', { className: 'ml-sb-review-text' }, draft.text || ''),
                             h(
                               'label',
@@ -2716,22 +2916,23 @@ p{margin:0 0 .7em}
                               }),
                               h('span', null, t('reviewConfirm')),
                             ),
-                            sendError ? h('div', { className: 'ml-sb-error' }, sendError) : null,
+                            sendError ? h('div', { className: 'ml-sb-banner ml-sb-banner-error' }, sendError) : null,
                             h(
                               'div',
                               { className: 'ml-sb-actions' },
                               h(
                                 'button',
                                 {
-                                  className: 'ml-btn ml-btn-primary',
+                                  className: 'ml-sb-primary',
                                   disabled: busy || !sending.reviewed,
                                   onClick: confirmSend,
                                 },
+                                h(SbIcon, { name: 'send' }),
                                 busy ? t('loading') : t('sendNow'),
                               ),
                               h(
                                 'button',
-                                { className: 'ml-btn ml-btn-ghost', onClick: () => setSending(null) },
+                                { className: 'ml-sb-secondary', onClick: () => setSending(null) },
                                 t('sendCancel'),
                               ),
                             ),
@@ -2743,7 +2944,7 @@ p{margin:0 0 .7em}
                               ? h(
                                   'button',
                                   {
-                                    className: 'ml-btn ml-btn-primary',
+                                    className: 'ml-sb-secondary',
                                     disabled: busy,
                                     onClick: () => {
                                       setSending({
@@ -2753,7 +2954,7 @@ p{margin:0 0 .7em}
                                         reviewed: false,
                                       })
                                       setSendError('')
-                                      setNotice('')
+                                      say('')
                                     },
                                   },
                                   t('reviewSend'),
@@ -2762,23 +2963,51 @@ p{margin:0 0 .7em}
                             draft.reviewUrl
                               ? h(
                                   'a',
-                                  {
-                                    className: 'ml-link',
-                                    href: draft.reviewUrl,
-                                    target: '_blank',
-                                    rel: 'noreferrer',
-                                  },
+                                  { className: 'ml-sb-link', href: draft.reviewUrl, target: '_blank', rel: 'noreferrer' },
                                   t('reviewInMailly'),
                                 )
                               : null,
                             h(
                               'button',
-                              { className: 'ml-btn ml-btn-ghost', disabled: busy, onClick: () => discardDraft(draft) },
+                              { className: 'ml-sb-secondary', disabled: busy, onClick: () => discardDraft(draft) },
                               t('discard'),
                             ),
                           ),
                     )
                   }),
+                )
+              : null,
+            composeOpen
+              ? h(
+                  'div',
+                  { className: 'ml-sb-compose', style: { margin: '12px -12px -12px', borderTop: 'none' } },
+                  h('div', { className: 'ml-sb-draft-head' }, h('span', null, t('composeHint'))),
+                  h('textarea', {
+                    value: draftText,
+                    placeholder: t('composePlaceholder'),
+                    onChange: (event) => setDraftText(event.target.value),
+                    'aria-label': t('composePlaceholder'),
+                  }),
+                  h(
+                    'div',
+                    { className: 'ml-sb-actions' },
+                    h(
+                      'button',
+                      { className: 'ml-sb-primary', disabled: busy || !draftText.trim(), onClick: saveDraft },
+                      busy ? t('loading') : t('saveDraft'),
+                    ),
+                    h(
+                      'button',
+                      {
+                        className: 'ml-sb-secondary',
+                        onClick: () => {
+                          setComposeOpen(false)
+                          setDraftText('')
+                        },
+                      },
+                      t('cancel'),
+                    ),
+                  ),
                 )
               : null,
           ),
@@ -2791,22 +3020,28 @@ p{margin:0 0 .7em}
         h('style', null, SIDEBAR_CSS),
         h(
           'div',
-          { className: 'ml-sb-bar' },
-          h('input', {
-            className: 'ml-input',
-            value: query,
-            placeholder: t('search'),
-            onChange: (event) => setQuery(event.target.value),
-            'aria-label': t('search'),
-          }),
+          { className: 'ml-sb-top' },
+          h(
+            'label',
+            { className: 'ml-sb-field' },
+            h(SbIcon, { name: 'search' }),
+            h('input', {
+              value: query,
+              placeholder: t('search'),
+              onChange: (event) => setQuery(event.target.value),
+              'aria-label': t('search'),
+            }),
+          ),
           h(
             'button',
             {
-              className: 'ml-btn ml-btn-ghost',
+              className: 'ml-sb-iconbtn',
+              title: t('refresh'),
+              'aria-label': t('refresh'),
               onClick: () => loadThreads(query),
               disabled: listLoading,
             },
-            t('refresh'),
+            h(SbIcon, { name: 'refresh' }),
           ),
         ),
         openId ? reader : list,
@@ -2816,28 +3051,6 @@ p{margin:0 0 .7em}
     /** The tab chip's text. */
     function MaillyTabTitle() {
       return 'Mailly'
-    }
-
-    /** Session-header button that opens the tab. */
-    function MaillyHeaderAction(props) {
-      const t = typeof props?.translate === 'function' ? props.translate : (key) => key
-      const open = props?.open
-      return h(
-        'button',
-        {
-          className: 'ml-btn ml-btn-ghost',
-          title: t('nav'),
-          'aria-label': t('nav'),
-          onClick: () => {
-            try {
-              if (typeof open === 'function') open()
-            } catch {
-              // Opening is best effort.
-            }
-          },
-        },
-        h(MaillyIcon, { size: 16 }),
-      )
     }
 
     /** The page component for one activation's context and translator. */
@@ -3001,6 +3214,18 @@ p{margin:0 0 .7em}
                   kind: TAB_KIND,
                   title: () => translate('nav'),
                   keepMounted: true,
+                  // The guide is the sidebar's own entry point: expand it and
+                  // pick Mailly, like the shipped file, browser and terminal
+                  // tabs.
+                  guide: [
+                    {
+                      id: 'inbox',
+                      order: 30,
+                      title: () => translate('nav'),
+                      description: () => translate('tabDescription'),
+                      icon: MaillyIcon,
+                    },
+                  ],
                 }),
               'mailly: sidebar tab type',
             ),
@@ -3027,30 +3252,6 @@ p{margin:0 0 .7em}
           disposers.push(
             ctx.slots.inject('sidebar.right.pane.tab.title', () =>
               ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: TAB_ID }, MaillyTabTitle),
-            ),
-          )
-          disposers.push(
-            ctx.slots.inject('conversation.session.header.actions', () =>
-              ctx.slots.register(
-                {
-                  name: 'conversation.session.header.actions',
-                  id: 'mailly',
-                  order: 40,
-                  label: () => translate('nav'),
-                },
-                (slotProps) =>
-                  h(MaillyHeaderAction, {
-                    ...slotProps,
-                    translate,
-                    open: () => {
-                      try {
-                        sidebarRight.openTab(TAB_KIND)
-                      } catch {
-                        // No Session on screen: nothing to open beside.
-                      }
-                    },
-                  }),
-              ),
             ),
           )
         }

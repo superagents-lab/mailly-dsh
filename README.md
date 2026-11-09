@@ -123,9 +123,9 @@ calls it without a human click.
   and the agent panel.
 - **The Mailly tab in the right sidebar** sits beside the conversation: one column that drills from the list
   into a conversation, with the same HTML bodies, drafts and two-step send. There is no agent panel there —
-  the conversation is already next to it — so **Send to agent** queues the hand-off prompt straight into the
-  current Session (`POST /mailly-api/agent/prompt`). Open it from the Mailly button in the conversation
-  header.
+  the conversation is already next to it — so **Send to agent** puts the hand-off prompt into the composer
+  for review (queueing it into the Session is the fallback). Open it from the sidebar's own guide: expand the
+  right sidebar and pick **Mailly**, the same way the file, browser and terminal tabs are opened.
 
 Both views read through the same Host routes; the tab is registered only when the right sidebar is present,
 so a profile without it keeps the full page working.

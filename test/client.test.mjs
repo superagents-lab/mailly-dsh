@@ -1343,11 +1343,20 @@ test('the plugin registers a right-sidebar tab when the services exist', () => {
   )
   assert.ok(title, 'the tab title is registered')
 
-  const header = registered.find(
-    (entry) => entry.options && entry.options.name === 'conversation.session.header.actions',
+  // The guide is the sidebar's own entry point, like the shipped tabs.
+  assert.ok(Array.isArray(tabType.tabType.guide), 'a guide card is declared')
+  assert.equal(tabType.tabType.guide.length, 1)
+  assert.equal(tabType.tabType.guide[0].id, 'inbox')
+  assert.equal(typeof tabType.tabType.guide[0].title, 'function')
+  assert.equal(typeof tabType.tabType.guide[0].description, 'function')
+
+  // No extra conversation-header button: the guide is the way in.
+  assert.equal(
+    registered.some(
+      (entry) => entry.options && entry.options.name === 'conversation.session.header.actions',
+    ),
+    false,
   )
-  assert.ok(header, 'the session header entry point is registered')
-  assert.equal(header.options.id, 'mailly')
 
   // The tab type registration is an effect, so it leaves with the plugin.
   assert.ok(effects.length >= 1)
