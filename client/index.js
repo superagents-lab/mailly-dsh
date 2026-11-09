@@ -52,6 +52,7 @@ window.__ModuleLoader__.load({
       agentPanelUnavailable: 'The agent panel needs the DSH conversation surface, which this page does not provide.',
       agentPanelNoThread: 'Open a conversation to work on it with the agent.',
       showImages: 'Show images',
+      hideImages: 'Hide images',
       emailFrameTitle: 'Email body',
       setupTitle: 'Connect Mailly',
       changeKey: 'Change key',
@@ -144,6 +145,7 @@ window.__ModuleLoader__.load({
       agentPanelUnavailable: 'agent 面板需要 DSH 的对话组件，当前页面没有提供。',
       agentPanelNoThread: '先打开一封邮件，再让 agent 处理。',
       showImages: '显示图片',
+      hideImages: '隐藏图片',
       emailFrameTitle: '邮件正文',
       setupTitle: '连接 Mailly',
       changeKey: '更换凭据',
@@ -656,6 +658,9 @@ p{margin:0 0 .7em}
       )
     }
 
+    /** Re-measure a body frame a few times while its images arrive. */
+    const MEASURE_DELAYS = [0, 120, 350, 800, 1600, 3000]
+
     /** Size a body frame to its content, once it has loaded. */
     function frameHeightOf(frame) {
       try {
@@ -877,6 +882,7 @@ p{margin:0 0 .7em}
       // frame heights. Both are keyed by message id.
       const [emailImages, setEmailImages] = useState({})
       const [emailHeights, setEmailHeights] = useState({})
+      const frameTimers = useRef([])
 
       // Embedded agent panel (the conversation stays on screen).
       const [agentOpen, setAgentOpen] = useState(false)
@@ -896,6 +902,8 @@ p{margin:0 0 .7em}
         mounted.current = true
         return () => {
           mounted.current = false
+          // A body frame may still be waiting to be re-measured.
+          for (const handle of frameTimers.current.splice(0)) clearTimeout(handle)
         }
       }, [])
 
@@ -1424,15 +1432,31 @@ p{margin:0 0 .7em}
       }, [])
 
       /**
-       * One message body: authored HTML in a sandboxed frame (no scripts, CSP
-       * blocks remote loads until the reader asks for images), else plain text.
+       * One message body: authored HTML in a sandboxed frame (no scripts, no
+       * forms; remote images load like a mail client, and the reader can turn
+       * them off per message), else plain text.
        */
+      /** Measure a body frame now and again while its images arrive. */
+      const scheduleMeasure = (key, frame) => {
+        const run = () => {
+          const next = frameHeightOf(frame)
+          if (next <= 0) return
+          setEmailHeights((current) => (current[key] === next ? current : { ...current, [key]: next }))
+        }
+        for (const delay of MEASURE_DELAYS) {
+          const handle = setTimeout(run, delay)
+          frameTimers.current.push(handle)
+        }
+      }
+
       const renderBody = (message) => {
         const html = typeof message.html === 'string' ? message.html : ''
         if (!html) return h('div', { className: 'ml-msg-body' }, message.body || '')
         const key = message.id || `${message.receivedAt}-${message.subject}`
-        const allowImages = Boolean(emailImages[key])
-        const height = emailHeights[key] || 180
+        const hasImages = /<img\b/i.test(html)
+        // Images load by default; `false` is the reader opting out.
+        const allowImages = emailImages[key] !== false
+        const height = emailHeights[key] || 220
         return h(
           'div',
           { className: 'ml-msg-html' },
@@ -1444,20 +1468,21 @@ p{margin:0 0 .7em}
             referrerPolicy: 'no-referrer',
             srcDoc: emailFrameDocument(html, allowImages),
             style: { height: `${height}px` },
-            onLoad: (event) => {
-              const next = frameHeightOf(event && event.target)
-              if (next > 0) setEmailHeights((current) => ({ ...current, [key]: next }))
-            },
+            onLoad: (event) => scheduleMeasure(key, event && event.target),
             title: text('emailFrameTitle'),
           }),
-          /<img\b/i.test(html) && !allowImages
+          hasImages
             ? h(
                 'button',
                 {
                   className: 'ml-btn ml-btn-ghost ml-msg-images',
-                  onClick: () => setEmailImages((current) => ({ ...current, [key]: true })),
+                  onClick: () =>
+                    setEmailImages((current) => {
+                      const next = { ...current, [key]: allowImages === false ? true : false }
+                      return next
+                    }),
                 },
-                text('showImages'),
+                allowImages ? text('hideImages') : text('showImages'),
               )
             : null,
         )

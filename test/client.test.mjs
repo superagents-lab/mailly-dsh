@@ -1128,21 +1128,25 @@ test('a message with authored HTML renders in a sandboxed frame', async () => {
   assert.equal(frame.props.sandbox, 'allow-same-origin', 'no script permission')
   assert.equal(frame.props.referrerPolicy, 'no-referrer')
   assert.match(frame.props.srcDoc, /<b>正文<\/b>/)
-  // Remote images are blocked until the reader asks for them.
-  assert.match(frame.props.srcDoc, /img-src data:/)
-  assert.doesNotMatch(frame.props.srcDoc, /img-src [^"]*https:/)
+  // Images load like a mail client, and the reader can turn them off.
+  assert.match(frame.props.srcDoc, /img-src https: http: data:/)
   assert.match(frame.props.srcDoc, /Content-Security-Policy/)
   assert.match(frame.props.srcDoc, /default-src 'none'/)
 
   // The plain text is not rendered twice; the frame carries the body.
   assert.equal(byClass(tree, 'ml-msg-body').length, 0)
 
-  const show = byText(tree, '显示图片')
-  assert.ok(show, 'the image opt-in renders')
-  show.props.onClick()
+  const hide = byText(tree, '隐藏图片')
+  assert.ok(hide, 'the image opt-out renders')
+  hide.props.onClick()
   tree = await settle()
-  const relaxed = walk(tree).find((node) => node.type === 'iframe')
-  assert.match(relaxed.props.srcDoc, /img-src https: http: data:/)
+  const blocked = walk(tree).find((node) => node.type === 'iframe')
+  assert.match(blocked.props.srcDoc, /img-src data:/)
+  assert.doesNotMatch(blocked.props.srcDoc, /img-src [^"]*https:/)
+  // And back again.
+  byText(tree, '显示图片').props.onClick()
+  tree = await settle()
+  assert.match(walk(tree).find((node) => node.type === 'iframe').props.srcDoc, /img-src https:/)
 })
 
 test('a message without HTML keeps the plain-text body', async () => {
