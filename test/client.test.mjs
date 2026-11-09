@@ -98,6 +98,12 @@ plugin.apply({
     },
   },
   get: (name) => (name === 'uiWorkspace' ? { startSession: (...args) => uiCalls.push(args) } : undefined),
+  effect: (fn) => {
+    const dispose = fn()
+    return () => {
+      if (typeof dispose === 'function') dispose()
+    }
+  },
   on: () => () => {},
 })
 
@@ -1038,13 +1044,13 @@ test('a reloaded bundle replaces the live registrations instead of vanishing', (
       },
     },
     get: () => undefined,
-    on: () => () => {},
     effect: (fn) => {
       const dispose = fn()
       return () => {
         if (typeof dispose === 'function') dispose()
       }
     },
+    on: () => () => {},
   })
   // The reloaded bundle registered its own entries.
   assert.ok(calls.filter((entry) => entry === 'register').length >= 2, 'the reloaded bundle registers its slots')
@@ -1081,13 +1087,13 @@ test('a reloaded bundle publishes its page and sidebar body to the live module',
     locale: { register: () => () => {}, bind: () => (key) => key, getLocale: () => ({ active: 'zh' }) },
     slots: { inject: () => () => {}, register: () => () => {} },
     get: () => undefined,
-    on: () => () => {},
     effect: (fn) => {
       const dispose = fn()
       return () => {
         if (typeof dispose === 'function') dispose()
       }
     },
+    on: () => () => {},
   })
   // Both hosts read from the runtime, so a mounted page picks up this bundle.
   assert.equal(typeof runtime.setPage, 'function')
@@ -1604,9 +1610,84 @@ test('a reloaded bundle swaps the sidebar body as well as the page', () => {
     locale: { register: () => () => {}, bind: () => (key) => key, getLocale: () => ({ active: 'zh' }) },
     slots: { inject: () => () => {}, register: () => () => {} },
     get: () => undefined,
+    effect: (fn) => {
+      const dispose = fn()
+      return () => {
+        if (typeof dispose === 'function') dispose()
+      }
+    },
     on: () => () => {},
     effect: () => () => {},
   })
   assert.notEqual(runtime.sidebarBody, before, 'the live module now owns the new body')
   assert.equal(typeof runtime.sidebarBody, 'function')
+})
+
+test('a second activation survives the dictionaries the first one registered', () => {
+  // The locale registry rejects a duplicate namespace, and the first
+  // activation's registration only goes away when its fiber unloads. An
+  // activation that leaves them behind therefore throws before registering any
+  // slot — the entry disappears until a restart. Registering through the fiber
+  // and tolerating a leftover namespace keeps the plugin alive.
+  const dicts = new Map()
+  const locale = {
+    register: (ns, localeId, dict) => {
+      const key = `${ns}:${localeId}`
+      if (dicts.has(key)) throw new Error(`locale namespace "${ns}" already has locale "${localeId}"`)
+      dicts.set(key, dict)
+      return () => dicts.delete(key)
+    },
+    bind: () => (key) => key,
+    getLocale: () => ({ active: 'zh' }),
+  }
+  const registered = []
+  const effects = []
+  const makeCtx = () => ({
+    locale,
+    slots: {
+      inject: (_key, callback) => {
+        callback()
+        return () => {}
+      },
+      register: (options) => {
+        registered.push(options && options.name)
+        return () => {}
+      },
+    },
+    effect: (fn) => {
+      const dispose = fn()
+      effects.push(dispose)
+      return () => {
+        if (typeof dispose === 'function') dispose()
+      }
+    },
+    get: () => undefined,
+    on: () => () => {},
+  })
+
+  const load = () => {
+    const second = []
+    globalThis.window = { __ModuleLoader__: { load: (spec) => second.push(spec) } }
+    new Function('window', read())(globalThis.window)
+    return second[0].factory((name) => {
+      if (name === 'react') return React
+      throw new Error(`unexpected require(${name})`)
+    })
+  }
+
+  // First activation registers the dictionaries.
+  load().apply(makeCtx())
+  assert.ok(dicts.size >= 2, 'dictionaries are registered')
+  assert.ok(registered.includes('main'))
+
+  // Second activation without unloading the first: it must still register.
+  registered.length = 0
+  load().apply(makeCtx())
+  assert.ok(registered.includes('main'), 'the page is registered again')
+  assert.ok(registered.includes('sidebar.panellist'), 'the sidebar entry is registered again')
+
+  // And unloading the first fiber releases its dictionaries, so a third
+  // activation starts clean.
+  for (const dispose of effects) if (typeof dispose === 'function') dispose()
+  assert.equal(dicts.size, 0, 'the fiber owns its dictionaries')
 })

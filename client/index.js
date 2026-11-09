@@ -3205,7 +3205,7 @@ p{margin:0 0 .7em}
         }
 
         const disposers = []
-        runtime.cleanup = () => {
+        const cleanup = () => {
           for (const dispose of disposers.splice(0)) {
             try {
               dispose()
@@ -3214,8 +3214,23 @@ p{margin:0 0 .7em}
             }
           }
         }
-        disposers.push(ctx.locale.register('mailly', 'en', EN))
-        disposers.push(ctx.locale.register('mailly', 'zh', ZH))
+        runtime.cleanup = cleanup
+        // Everything this activation registers is owned by its fiber: without
+        // this the dictionaries outlive an unload, and the next activation
+        // throws "namespace already has locale" before registering anything —
+        // which is why disabling and re-enabling the plugin lost the entry.
+        ctx.effect(() => cleanup, 'mailly: client registrations')
+
+        // A namespace left behind by a failed activation must not kill this one.
+        const registerDictionary = (locale, dict) => {
+          try {
+            return ctx.locale.register('mailly', locale, dict)
+          } catch {
+            return () => {}
+          }
+        }
+        disposers.push(registerDictionary('en', EN))
+        disposers.push(registerDictionary('zh', ZH))
 
         // The page is a swappable reference: a reloaded bundle replaces the
         // component behind it, so the rendered page picks up new code without
