@@ -846,6 +846,174 @@ async function discardDraft(req, res, draftId, key) {
 }
 
 // ---------------------------------------------------------------------------
+// Agent sessions: one DSH session per Mailly conversation
+//
+// The workbench keeps the inbox on screen and shows the agent beside it, so
+// the page needs the session's transcript and a way to ask a follow-up. The
+// thread-to-session map lives in $DSH_HOME/mailly/sessions.json (0600) so a
+// restart resumes the same session instead of starting another one.
+
+const AGENT_MESSAGE_LIMIT = 60
+const AGENT_TEXT_LIMIT = 12_000
+
+function sessionsPath() {
+  return join(dshHome(), 'mailly', 'sessions.json')
+}
+
+async function readSessionMap() {
+  try {
+    const parsed = JSON.parse(await readFile(sessionsPath(), 'utf8'))
+    if (parsed && parsed.version === 1 && parsed.threads && typeof parsed.threads === 'object') return parsed.threads
+  } catch {
+    // Missing or unreadable: start from an empty map.
+  }
+  return {}
+}
+
+async function writeSessionMap(threads) {
+  const file = sessionsPath()
+  await mkdir(dirname(file), { recursive: true, mode: 0o700 })
+  await writeFile(file, `${JSON.stringify({ version: 1, threads }, null, 2)}\n`, { mode: 0o600 })
+  await chmod(file, 0o600)
+}
+
+function agentService(ctx) {
+  const sessionController = ctx.get('sessionController')
+  return sessionController && typeof sessionController.create === 'function' ? sessionController : null
+}
+
+/** Text of one session record for the page (plain text only). */
+function agentMessageOf(record) {
+  const event = record && record.event ? record.event : record
+  if (!event || typeof event !== 'object') return null
+  if (event.type === 'user/message' || event.type === 'assistant/message') {
+    const data = event.data || {}
+    const content = Array.isArray(data.content) ? data.content : []
+    const text = content
+      .filter((part) => part && part.type === 'text' && typeof part.text === 'string')
+      .map((part) => part.text)
+      .join('\n')
+      .trim()
+    if (!text) return null
+    // The page shows the conversation, not the internal instruction blocks.
+    if (text.startsWith('Current runtime context.')) return null
+    return {
+      id: `${event.seq ?? ''}-${event.type}`,
+      role: event.type === 'user/message' ? 'user' : 'assistant',
+      text: text.length > AGENT_TEXT_LIMIT ? `${text.slice(0, AGENT_TEXT_LIMIT)}\n…` : text,
+    }
+  }
+  return null
+}
+
+async function agentTranscript(sessionController, sessionId) {
+  const page = await sessionController.events(
+    { address: { kind: 'session', sessionId }, maxMessages: AGENT_MESSAGE_LIMIT },
+    AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  )
+  const records = Array.isArray(page && page.records) ? page.records : []
+  const messages = []
+  for (const record of records) {
+    const message = agentMessageOf(record)
+    if (message) messages.push(message)
+  }
+  return messages.slice(-AGENT_MESSAGE_LIMIT)
+}
+
+async function startAgentSession(req, res, ctx) {
+  const sessionController = agentService(ctx)
+  if (!sessionController) {
+    send(res, 409, { error: 'agent_unavailable' })
+    return
+  }
+  let body
+  try {
+    body = await readJson(req)
+  } catch {
+    send(res, 400, { error: 'Expected a JSON body' })
+    return
+  }
+  const threadId = typeof body?.thread_id === 'string' ? body.thread_id.trim() : ''
+  if (!threadId || !DRAFT_ID_PATTERN.test(threadId)) {
+    send(res, 400, { error: 'invalid_thread_id' })
+    return
+  }
+  const prompt = typeof body?.prompt === 'string' ? body.prompt.slice(0, 4000) : ''
+  const threads = await readSessionMap()
+  let sessionId = threads[threadId]
+  if (!sessionId) {
+    const created = await sessionController.create({ agentPreset: 'standard' })
+    sessionId = created.sessionId
+    threads[threadId] = sessionId
+    await writeSessionMap(threads)
+  }
+  if (prompt) {
+    await sessionController.prompt({
+      requestId: randomUUID(),
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text: prompt }],
+    })
+  }
+  send(res, 200, { sessionId, threadId })
+}
+
+async function promptAgentSession(req, res, ctx) {
+  const sessionController = agentService(ctx)
+  if (!sessionController) {
+    send(res, 409, { error: 'agent_unavailable' })
+    return
+  }
+  let body
+  try {
+    body = await readJson(req)
+  } catch {
+    send(res, 400, { error: 'Expected a JSON body' })
+    return
+  }
+  const sessionId = typeof body?.session_id === 'string' ? body.session_id.trim() : ''
+  const text = typeof body?.text === 'string' ? body.text.trim() : ''
+  if (!sessionId) {
+    send(res, 400, { error: 'session_id is required' })
+    return
+  }
+  if (!text) {
+    send(res, 400, { error: 'text is required' })
+    return
+  }
+  try {
+    await sessionController.prompt({
+      requestId: randomUUID(),
+      sessionId,
+      mode: 'queue',
+      content: [{ type: 'text', text: text.slice(0, 8000) }],
+    })
+  } catch (error) {
+    send(res, 502, { error: 'agent_prompt_failed', detail: messageOf(error) })
+    return
+  }
+  send(res, 200, { accepted: true })
+}
+
+async function agentMessages(req, res, ctx, url) {
+  const sessionController = agentService(ctx)
+  if (!sessionController) {
+    send(res, 409, { error: 'agent_unavailable' })
+    return
+  }
+  const sessionId = url.searchParams.get('session') || ''
+  if (!sessionId) {
+    send(res, 400, { error: 'session is required' })
+    return
+  }
+  try {
+    send(res, 200, { sessionId, messages: await agentTranscript(sessionController, sessionId) })
+  } catch (error) {
+    send(res, 502, { error: 'agent_transcript_failed', detail: messageOf(error) })
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Inbound automation: a new email starts (or continues) one DSH session per
 // thread. Off by default; the state file lives beside the credentials.
 
@@ -943,11 +1111,26 @@ async function automationStatus() {
   }
 }
 
-async function handle(req, res, path, method, url) {
+async function handle(req, res, ctx, path, method, url) {
   if (method === 'GET' && path === '/status') {
     // Cheap and local: never cached, so a credential written or removed by
     // anything else (tests, a manual edit, the device flow) shows up at once.
     send(res, 200, await statusPayload())
+    return
+  }
+
+  if (method === 'POST' && path === '/agent/session') {
+    await startAgentSession(req, res, ctx)
+    return
+  }
+
+  if (method === 'POST' && path === '/agent/prompt') {
+    await promptAgentSession(req, res, ctx)
+    return
+  }
+
+  if (method === 'GET' && path === '/agent') {
+    await agentMessages(req, res, ctx, url)
     return
   }
 
@@ -1128,7 +1311,7 @@ async function handle(req, res, path, method, url) {
   send(res, 404, { error: 'not_found' })
 }
 
-function createRouteHandler() {
+function createRouteHandler(ctx) {
   return async function handler(req, res) {
     try {
       if (!isLoopback(req) || !sameOrigin(req)) {
@@ -1138,7 +1321,7 @@ function createRouteHandler() {
       const url = new URL(req.url || '/', 'http://localhost')
       const path = url.pathname.slice(ROUTE.length) || '/'
       const method = (req.method || 'GET').toUpperCase()
-      await handle(req, res, path, method, url)
+      await handle(req, res, ctx, path, method, url)
     } catch (error) {
       if (res.headersSent) {
         res.end()
@@ -1158,7 +1341,7 @@ function isStaleRouteError(error) {
 export function apply(ctx) {
   let disposeRoute
   try {
-    disposeRoute = ctx.webServer.register({ kind: 'prefix', path: ROUTE, handler: createRouteHandler() })
+    disposeRoute = ctx.webServer.register({ kind: 'prefix', path: ROUTE, handler: createRouteHandler(ctx) })
   } catch (error) {
     // A previous in-process activation can still own the route because its
     // cleanup never ran. Failing here would also lose the model tools, so keep

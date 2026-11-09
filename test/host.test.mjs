@@ -515,3 +515,129 @@ test('enabling automation starts the poller and a new email creates one session'
     globalThis.fetch = upstreamFetch
   }
 })
+
+// ---------------------------------------------------------------------------
+// Agent sessions: one DSH session per conversation
+
+function agentServices() {
+  const sessions = { created: 0, prompts: [] }
+  const sessionController = {
+    async create() {
+      sessions.created += 1
+      return { sessionId: `s-${sessions.created}` }
+    },
+    async prompt(request) {
+      sessions.prompts.push(request)
+      return { accepted: true }
+    },
+    async events(request) {
+      return {
+        cursor: 3,
+        hasMore: false,
+        records: [
+          { type: 'event', event: { type: 'user/message', seq: 1, time: 1, data: { content: [{ type: 'text', text: '请处理这封邮件' }] } } },
+          { type: 'event', event: { type: 'assistant/message', seq: 2, time: 2, data: { content: [{ type: 'text', text: '草稿已保存' }] } } },
+        ],
+      }
+    },
+  }
+  return { sessions, sessionController }
+}
+
+test('the page starts one session per conversation and reuses it', async () => {
+  const { sessions, sessionController } = agentServices()
+  const wired = createHarness({ services: { sessionController } })
+  try {
+    const first = await send(wired.handler, {
+      method: 'POST',
+      url: '/mailly-api/agent/session',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thread_id: 'thread-1', prompt: 'read and draft' }),
+    })
+    assert.equal(first.status, 200)
+    assert.equal(first.body.sessionId, 's-1')
+    assert.equal(sessions.created, 1)
+    assert.equal(sessions.prompts.length, 1)
+    assert.equal(sessions.prompts[0].mode, 'queue')
+
+    const again = await send(wired.handler, {
+      method: 'POST',
+      url: '/mailly-api/agent/session',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thread_id: 'thread-1' }),
+    })
+    assert.equal(again.body.sessionId, 's-1')
+    assert.equal(sessions.created, 1, 'the same conversation keeps its session')
+
+    const other = await send(wired.handler, {
+      method: 'POST',
+      url: '/mailly-api/agent/session',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thread_id: 'thread-2' }),
+    })
+    assert.equal(other.body.sessionId, 's-2')
+    assert.equal(sessions.created, 2)
+  } finally {
+    wired.dispose()
+  }
+})
+
+test('the page can ask a follow-up and read the transcript', async () => {
+  const { sessions, sessionController } = agentServices()
+  const wired = createHarness({ services: { sessionController } })
+  try {
+    const asked = await send(wired.handler, {
+      method: 'POST',
+      url: '/mailly-api/agent/prompt',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: 's-1', text: '语气再客气一点' }),
+    })
+    assert.equal(asked.status, 200)
+    assert.equal(sessions.prompts.at(-1).content[0].text, '语气再客气一点')
+
+    const transcript = await send(wired.handler, { url: '/mailly-api/agent?session=s-1' })
+    assert.equal(transcript.status, 200)
+    assert.deepEqual(
+      transcript.body.messages.map((message) => [message.role, message.text]),
+      [
+        ['user', '请处理这封邮件'],
+        ['assistant', '草稿已保存'],
+      ],
+    )
+  } finally {
+    wired.dispose()
+  }
+})
+
+test('agent routes refuse politely without a session service or valid input', async () => {
+  const plain = createHarness()
+  const unavailable = await send(plain.handler, {
+    method: 'POST',
+    url: '/mailly-api/agent/session',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ thread_id: 'thread-1' }),
+  })
+  assert.equal(unavailable.status, 409)
+  assert.equal(unavailable.body.error, 'agent_unavailable')
+
+  const { sessionController } = agentServices()
+  const wired = createHarness({ services: { sessionController } })
+  try {
+    const badThread = await send(wired.handler, {
+      method: 'POST',
+      url: '/mailly-api/agent/session',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ thread_id: '../etc' }),
+    })
+    assert.equal(badThread.status, 400)
+    const badPrompt = await send(wired.handler, {
+      method: 'POST',
+      url: '/mailly-api/agent/prompt',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ session_id: 's-1', text: '   ' }),
+    })
+    assert.equal(badPrompt.status, 400)
+  } finally {
+    wired.dispose()
+  }
+})

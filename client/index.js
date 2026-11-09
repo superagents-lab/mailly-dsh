@@ -257,6 +257,8 @@ window.__ModuleLoader__.load({
 .ml-agent-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1)}
 .ml-agent-title{font-weight:600;font-size:13px;margin-right:auto}
 .ml-agent-host{flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column}
+.ml-agent-msg{white-space:pre-wrap;word-break:break-word;font-size:12.5px;line-height:1.55;padding:9px 12px;margin:8px 10px;border-radius:9px;background:var(--dsw-alias-bg-base);border:1px solid var(--dsw-alias-border-l1)}
+.ml-agent-msg-user{background:var(--dsw-alias-bg-layer-2);border-color:var(--dsw-alias-border-l2)}
 .ml-agent-empty{color:var(--dsw-alias-label-secondary);font-size:12px;padding:16px 14px}
 .ml-agent-compose{flex:0 0 auto;display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--dsw-alias-border-l1)}
 .ml-agent-compose .ml-input{flex:1 1 auto;min-width:0}
@@ -458,6 +460,15 @@ window.__ModuleLoader__.load({
         PAGE_CACHE.threadId = ''
         THREADS.length = 0
       },
+      // Forget which conversation owns which DSH session.
+      resetSessions() {
+        for (const key of Object.keys(SESSION_CACHE)) delete SESSION_CACHE[key]
+        try {
+          globalThis.localStorage?.removeItem(SESSION_KEY)
+        } catch {
+          // Storage may be unavailable.
+        }
+      },
       draftMatches,
       findDraft,
       replyRecipient,
@@ -606,6 +617,43 @@ window.__ModuleLoader__.load({
       return hit ? hit.payload : null
     }
 
+    // Each Mailly conversation owns one DSH session. The Host keeps the
+    // authoritative map; this copy only lets the page show "open" at once.
+
+    const SESSION_CACHE = {}
+    const SESSION_KEY = 'mailly:sessions'
+
+    function rememberSession(threadId, sessionId) {
+      if (!threadId || !sessionId) return
+      SESSION_CACHE[threadId] = sessionId
+      try {
+        globalThis.localStorage?.setItem(SESSION_KEY, JSON.stringify(SESSION_CACHE))
+      } catch {
+        // Storage may be unavailable; the Host map still decides.
+      }
+    }
+
+    function sessionFor(threadId) {
+      if (!threadId) return ''
+      if (SESSION_CACHE[threadId]) return SESSION_CACHE[threadId]
+      try {
+        const raw = globalThis.localStorage?.getItem(SESSION_KEY)
+        if (raw) Object.assign(SESSION_CACHE, JSON.parse(raw))
+      } catch {
+        // Ignore unreadable storage.
+      }
+      return SESSION_CACHE[threadId] || ''
+    }
+
+    /** One prompt for a conversation the agent has not seen yet. */
+    function conversationPrompt(text, thread) {
+      const messages = thread && Array.isArray(thread.messages) ? thread.messages : []
+      const subject = (messages[0] && messages[0].subject) || ''
+      return String(text)
+        .replace('{{thread}}', (thread && thread.threadId) || '')
+        .replace('{{subject}}', subject)
+    }
+
     // ---------------------------------------------------------------------
     // Sidebar icon
 
@@ -667,15 +715,6 @@ window.__ModuleLoader__.load({
       const text = typeof props?.translate === 'function' ? props.translate : (key) => key
       const locale = typeof props?.getLocale === 'function' ? props.getLocale() : 'zh'
       const uiWorkspace = props?.uiWorkspace
-      // A surface is only usable when it is a render function; anything else
-      // (the harness hands the page a placeholder) falls back to the plain
-      // handoff.
-      const agentSurface = (() => {
-        for (const candidate of [props?.agentSurface, props?.conversationSurface]) {
-          if (typeof candidate === 'function') return candidate
-        }
-        return null
-      })()
 
       const [status, setStatus] = useState(() => PAGE_CACHE.status)
       const [bootError, setBootError] = useState('')
@@ -714,6 +753,7 @@ window.__ModuleLoader__.load({
 
       // Embedded agent panel (the conversation stays on screen).
       const [agentOpen, setAgentOpen] = useState(false)
+      const [agentMessages, setAgentMessages] = useState([])
       const [agentInput, setAgentInput] = useState('')
       const [agentBusy, setAgentBusy] = useState(false)
       const [agentError, setAgentError] = useState('')
@@ -724,7 +764,6 @@ window.__ModuleLoader__.load({
       const signInActive = useRef(false)
       const mounted = useRef(true)
       const threadRef = useRef(null)
-      const agentPanelRef = useRef(null)
 
       useEffect(() => {
         mounted.current = true
@@ -1170,69 +1209,85 @@ window.__ModuleLoader__.load({
         }
       }, [thread, discarding, discardBusy, openThread, text])
 
-      // The agent panel keeps the conversation on screen: "Hand to agent"
-      // starts (or reuses) this conversation's session and shows it in the
-      // side panel instead of navigating away from the inbox.
+      // The agent panel keeps the conversation on screen. Each Mailly
+      // conversation owns one DSH session: "Hand to agent" opens (or resumes)
+      // that session beside the reader and queues the draft task, and later
+      // questions go to the same session.
+      const agentSessionId = thread ? sessionFor(thread.threadId) : ''
+
+      const loadAgentMessages = useCallback(async (sessionId) => {
+        const data = await api(`/agent?session=${encodeURIComponent(sessionId)}&limit=60`)
+        setAgentMessages(Array.isArray(data.messages) ? data.messages : [])
+      }, [])
+
       const handToAgent = useCallback(async () => {
         if (!thread || demo) return
+        setAgentOpen(true)
+        setAgentError('')
         setNotice('')
         setNoticeOk(false)
-        const messages = Array.isArray(thread.messages) ? thread.messages : []
-        const subject = (messages[0] && messages[0].subject) || ''
-        const prompt = String(text('prompt')).replace('{{thread}}', thread.threadId || '').replace('{{subject}}', subject)
-        const panel = agentPanelRef.current
-        if (panel && typeof panel.open === 'function') {
-          setAgentOpen(true)
-          try {
-            await panel.open({ prompt })
-            setAgentError('')
-            return
-          } catch (error) {
-            setAgentError(String(error.message || error))
+        const threadId = thread.threadId || ''
+        const existing = sessionFor(threadId)
+        setAgentBusy(true)
+        try {
+          if (existing) {
+            await loadAgentMessages(existing)
             return
           }
-        }
-        if (!uiWorkspace || typeof uiWorkspace.startSession !== 'function') {
-          // Without a surface or a session service the panel still opens and
-          // explains itself; nothing navigates.
-          setAgentOpen(true)
-          setNotice(text('agentUnavailable'))
-          return
-        }
-        try {
-          uiWorkspace.startSession(undefined, { prompt, whenDraftExists: 'append' })
-          setNotice(text('agentStarted'))
-        } catch (error) {
-          setNotice(String(error.message || error))
-        }
-      }, [thread, demo, uiWorkspace, text])
-
-      const askAgentPanel = useCallback(async () => {
-        const question = agentInput.trim()
-        const panel = agentPanelRef.current
-        if (!question || !panel || typeof panel.ask !== 'function') return
-        setAgentBusy(true)
-        setAgentError('')
-        try {
-          await panel.ask(question)
-          setAgentInput('')
+          const created = await api('/agent/session', {
+            method: 'POST',
+            body: { thread_id: threadId, prompt: conversationPrompt(text('prompt'), thread) },
+          })
+          rememberSession(threadId, created.sessionId)
+          await loadAgentMessages(created.sessionId)
         } catch (error) {
           setAgentError(String(error.message || error))
         } finally {
           setAgentBusy(false)
         }
-      }, [agentInput])
+      }, [thread, demo, text, loadAgentMessages])
 
-      // The surface is called directly: it is a render function supplied by
-      // the host page, and calling it (rather than rendering it as a component
-      // type) keeps the panel's imperative handle independent of that page.
-      const agentHost = agentSurface
-        ? agentSurface({
-            ref: agentPanelRef,
-            threadId: thread ? thread.threadId : '',
-            hint: text('agentPanelHint'),
-          })
-        : h('div', { className: 'ml-agent-empty' }, text(thread ? 'agentPanelUnavailable' : 'agentPanelNoThread'))
+      const askAgentPanel = useCallback(async () => {
+        const question = agentInput.trim()
+        const threadId = thread ? thread.threadId : ''
+        if (!question || !threadId || agentBusy) return
+        setAgentBusy(true)
+        setAgentError('')
+        try {
+          let sessionId = sessionFor(threadId)
+          if (!sessionId) {
+            const created = await api('/agent/session', { method: 'POST', body: { thread_id: threadId } })
+            sessionId = created.sessionId
+            rememberSession(threadId, sessionId)
+          }
+          await api('/agent/prompt', { method: 'POST', body: { session_id: sessionId, text: question } })
+          setAgentInput('')
+          await loadAgentMessages(sessionId)
+        } catch (error) {
+          setAgentError(String(error.message || error))
+        } finally {
+          setAgentBusy(false)
+        }
+      }, [agentInput, thread, agentBusy, loadAgentMessages])
+
+      // While the panel is open, follow the session's answer. The timer is
+      // cleared on close and on unmount so a hidden panel costs nothing.
+      useEffect(() => {
+        if (!agentOpen || !agentSessionId) return undefined
+        const handle = setInterval(() => {
+          loadAgentMessages(agentSessionId).catch(() => {})
+        }, 2500)
+        // Never keep the page (or a test process) alive just for this poll.
+        if (handle && typeof handle.unref === 'function') handle.unref()
+        return () => clearInterval(handle)
+      }, [agentOpen, agentSessionId, loadAgentMessages])
+
+      // Leaving the page closes the panel, which also stops the poll above.
+      useEffect(() => {
+        return () => {
+          setAgentOpen(false)
+        }
+      }, [])
 
       const latestMessage = useMemo(() => {
         if (!thread || !Array.isArray(thread.messages) || !thread.messages.length) return null
@@ -1769,7 +1824,26 @@ window.__ModuleLoader__.load({
                     '×',
                   ),
                 ),
-                h('div', { className: 'ml-agent-host' }, agentHost),
+                h(
+                  'div',
+                  { className: 'ml-agent-host' },
+                  agentMessages.length
+                    ? agentMessages.map((message, index) =>
+                        h(
+                          'div',
+                          {
+                            key: message.id || `${index}`,
+                            className: `ml-agent-msg${message.role === 'user' ? ' ml-agent-msg-user' : ''}`,
+                          },
+                          message.text || '',
+                        ),
+                      )
+                    : h(
+                        'div',
+                        { className: 'ml-agent-empty' },
+                        text(thread ? (agentBusy ? 'loading' : 'agentPanelHint') : 'agentPanelNoThread'),
+                      ),
+                ),
                 agentError ? h('div', { className: 'ml-error', style: { padding: '0 12px 8px' } }, agentError) : null,
                 h(
                   'div',
@@ -1812,7 +1886,6 @@ window.__ModuleLoader__.load({
       inject: ['slots', 'locale', 'uiWorkspace'],
       // Optional: the host page's conversation surface, used for the embedded
       // agent panel. Read defensively so a page without it still renders.
-      optional: ['conversationSurface'],
       /** Pure helpers, exposed for the test harness (no runtime use). */
       testHelpers,
       apply(ctx) {
@@ -1890,14 +1963,6 @@ window.__ModuleLoader__.load({
                   }
                 },
                 uiWorkspace: ctx.get('uiWorkspace'),
-                conversationSurface: (() => {
-                  try {
-                    const seat = ctx.get('conversationSurface')
-                    return seat && typeof seat === 'function' ? seat : null
-                  } catch {
-                    return null
-                  }
-                })(),
               }),
             ),
           ),

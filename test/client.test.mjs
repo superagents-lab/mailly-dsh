@@ -18,6 +18,7 @@ let hookIndex = 0
 let dirty = false
 const states = []
 const effects = []
+const intervals = []
 
 const React = {
   createElement: (type, props, ...children) => ({ type, props: props || {}, children: children.flat(Infinity) }),
@@ -45,6 +46,14 @@ const React = {
   },
   useCallback: (fn) => fn,
   useMemo: (fn) => fn(),
+  // The page polls a live agent transcript; record the interval so the harness
+  // can clear it when a test finishes, or the process would never exit.
+  setInterval: (fn, ms) => {
+    const handle = setInterval(fn, ms)
+    intervals.push(handle)
+    return handle
+  },
+  clearInterval: (handle) => clearInterval(handle),
   useRef: (init) => {
     const index = hookIndex++
     if (!(index in states)) states[index] = { current: init }
@@ -128,7 +137,17 @@ const byTagText = (tree, tag, label) =>
   walk(tree).find((node) => node.type === tag && textOf(node).includes(label))
 
 /** Fresh hook state so each test starts from a clean mount. */
+globalThis.__MAILLY_STOP_TIMERS = () => {
+  for (const handle of intervals.splice(0)) clearInterval(handle)
+}
+
+process.on('beforeExit', () => {
+  for (const handle of intervals.splice(0)) clearInterval(handle)
+})
+
 function resetHooks() {
+  // A previous mount may still hold a transcript poller; stop it first.
+  for (const handle of intervals.splice(0)) clearInterval(handle)
   states.length = 0
   effects.length = 0
   hookIndex = 0
@@ -316,6 +335,21 @@ test('drives list, reader, agent handoff and draft saving', async () => {
       })
     }
     if (path.includes('/thread?id=')) return ok(threadDetail)
+    if (path.endsWith('/agent/session') && options.method === 'POST') {
+      return ok({ sessionId: 's1', threadId: 't1' })
+    }
+    if (path.includes('/agent?session=')) {
+      return ok({
+        sessionId: 's1',
+        messages: [
+          { id: 'a1', role: 'user', text: '请处理这封 Mailly 邮件。' },
+          { id: 'a2', role: 'assistant', text: '读完了，草稿已保存：好的，我确认。' },
+        ],
+      })
+    }
+    if (path.endsWith('/agent/prompt') && options.method === 'POST') {
+      return ok({ accepted: true })
+    }
     if (path.endsWith('/drafts') && options.method === 'POST') {
       threadDetail.drafts = [
         { id: 'd1', revision: 1, status: 'pending', text: '好的，我确认。', reviewUrl: 'https://mailly.site/review/abc' },
@@ -383,14 +417,19 @@ test('drives list, reader, agent handoff and draft saving', async () => {
   assert.match(textOf(tree), /第二封正文/)
 
   // --- hand to the agent ---------------------------------------------------
+  // The agent opens beside the conversation: the Host starts this thread's
+  // session, the page shows its transcript and never navigates away.
   byText(tree, '让 agent 处理').props.onClick()
   tree = await settle()
-  assert.equal(uiCalls.length, 1)
-  const [workspaceId, options] = uiCalls[0]
-  assert.equal(workspaceId, undefined)
-  assert.match(options.prompt, /thread_id: t1/)
-  assert.match(options.prompt, /mailly_inbox_save_draft/)
-  assert.match(textOf(tree), /按回车即可开始/)
+  const created = calls.filter((call) => /\/agent\/session$/.test(call.path) && call.options.method === 'POST')
+  assert.equal(created.length, 1)
+  const createdBody = JSON.parse(created[0].options.body)
+  assert.equal(createdBody.thread_id, 't1')
+  assert.match(createdBody.prompt, /thread_id: t1/)
+  assert.match(createdBody.prompt, /mailly_inbox_save_draft/)
+  assert.equal(uiCalls.length, 0, 'no navigation to a new session')
+  assert.equal(byClass(tree, 'ml-message').length, 2, 'the conversation stays on screen')
+  assert.equal(byClass(tree, 'ml-agent').length, 1, 'the agent panel is open')
 
   // --- draft and save ------------------------------------------------------
   byText(tree, '起草回复').props.onClick()
@@ -816,6 +855,8 @@ test('no send control without send scope, and never in the agent prompt', async 
         }),
       )
     }
+    if (path.endsWith('/agent/session') && options.method === 'POST') return ok({ sessionId: 's1', threadId: 't1' })
+    if (path.includes('/agent?session=')) return ok({ sessionId: 's1', messages: [] })
     return fail(404, `unexpected ${path}`)
   }
   const { settle } = mountWorkbench()
@@ -826,12 +867,33 @@ test('no send control without send scope, and never in the agent prompt', async 
   assert.ok(byTagText(tree, 'a', '在 Mailly 中审核并发送'), 'review link stays')
 
   // The hand-off prompt never offers sending.
-  const before = uiCalls.length
-  byText(tree, '让 agent 处理').props.onClick()
-  tree = await settle()
-  assert.equal(uiCalls.length, before + 1)
-  const prompt = uiCalls[uiCalls.length - 1][1].prompt
+  // Start from a clean slate: a previous test in this file may have opened
+  // this conversation's panel, and the page remembers the thread's session.
+  plugin.testHelpers.resetPageCache()
+  plugin.testHelpers.resetSessions()
+  const before = calls.length
+  const handOff = byText(tree, '让 agent 处理')
+  assert.ok(handOff, 'hand-off button should render')
+  handOff.props.onClick()
+  tree = await settle(20)
+  assert.equal(uiCalls.length, 0, 'no navigation to a new session')
+  // The hand-off now starts the thread's DSH session through the Host; the
+  // prompt it carries is the same "read, draft, never send" instruction.
+  const created = calls
+    .slice(before)
+    .filter((call) => /\/agent\/session$/.test(call.path) && call.options.method === 'POST')
+  const prompt = created.length ? JSON.parse(created[0].options.body).prompt : ''
+  assert.equal(
+    created.length,
+    1,
+    `the hand-off starts the thread session through the Host; calls: ${calls
+      .slice(before)
+      .slice(0, 5)
+      .map((call) => `${call.options.method || 'GET'} ${call.path}`)
+      .join(' | ')}`,
+  )
   assert.match(prompt, /不要发送/)
+  assert.match(prompt, /永远不要发送/)
   assert.doesNotMatch(prompt, /approve|发送这封|send/i)
 })
 
@@ -839,6 +901,8 @@ test('no send control without send scope, and never in the agent prompt', async 
 // Instant return and the embedded agent panel
 
 test('returning to the page paints the cached list before Mailly answers', async () => {
+  // No agent routes here: the page must paint from its cache without opening
+  // the panel, so no transcript poller can outlive the test.
   let releaseThreads
   let gated = false
   const gate = new Promise((resolve) => {
@@ -871,5 +935,9 @@ test('returning to the page paints the cached list before Mailly answers', async
   releaseThreads()
   tree = await second.settle()
   assert.equal(byClass(tree, 'ml-row').length, 1)
+
+  // Both mounts may still hold timers; clear them so the process can exit.
+  resetHooks()
+  for (const handle of intervals.splice(0)) clearInterval(handle)
 })
 
