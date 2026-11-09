@@ -1046,8 +1046,6 @@ test('the hand-off button is readable in every theme', () => {
   // color from theme tokens.
   assert.match(source, /\.ml-btn-agent\{[^}]*background:var\(--dsw-alias-brand-primary\)/)
   assert.match(source, /\.ml-btn-agent\{[^}]*color:var\(--dsw-alias-bg-base\)/)
-  const main = registrations.find((entry) => entry.options.name === 'main')
-  const tree = main.component({})
-  const sourceText = read()
-  assert.match(sourceText, /className: 'ml-btn-agent',\s*\n\s*onClick: handToAgent/)
+  // The hand-off button itself uses that class.
+  assert.match(source, /className: 'ml-btn-agent',\s*\n\s*onClick: handToAgent/)
 })
