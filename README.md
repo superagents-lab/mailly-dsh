@@ -117,6 +117,19 @@ route accepts a caller-chosen upstream URL. No route returns the credential.
 the revision and text byte-for-byte against what the page showed. No model tool calls it, and the page never
 calls it without a human click.
 
+## Two places to read mail
+
+- **The full inbox** (the Mailly entry in the left sidebar) is the browsing surface: list, reader, drafts,
+  and the agent panel.
+- **The Mailly tab in the right sidebar** sits beside the conversation: one column that drills from the list
+  into a conversation, with the same HTML bodies, drafts and two-step send. There is no agent panel there —
+  the conversation is already next to it — so **Send to agent** queues the hand-off prompt straight into the
+  current Session (`POST /mailly-api/agent/prompt`). Open it from the Mailly button in the conversation
+  header.
+
+Both views read through the same Host routes; the tab is registered only when the right sidebar is present,
+so a profile without it keeps the full page working.
+
 ## Agent beside the inbox
 
 **Hand to agent** opens the agent panel next to the conversation instead of leaving the page. Each Mailly

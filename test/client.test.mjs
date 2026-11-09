@@ -1256,3 +1256,136 @@ test('handing a conversation to the agent sends the whole thread', async () => {
   assert.match(body.prompt, /第二封正文/)
   assert.doesNotMatch(body.prompt, /mailly_inbox_read_thread/)
 })
+
+// ---------------------------------------------------------------------------
+// Right-sidebar tab
+
+function sidebarHarness() {
+  const registered = []
+  const injected = []
+  const effects = []
+  const ctx = {
+    locale: {
+      register: () => () => {},
+      bind: () => (key) => key,
+      getLocale: () => ({ active: 'zh' }),
+    },
+    slots: {
+      inject: (key, callback) => {
+        injected.push(key)
+        callback()
+        return () => {}
+      },
+      register: (options, component) => {
+        registered.push({ options, component })
+        return () => {}
+      },
+    },
+    effect: (fn) => {
+      // Cordis runs the effect immediately and keeps its disposer.
+      const dispose = fn()
+      effects.push(fn)
+      return () => {
+        if (typeof dispose === 'function') dispose()
+      }
+    },
+    get: (name) => {
+      if (name === 'uiWorkspace') return undefined
+      if (name === 'sidebarRightTabs') {
+        return {
+          register: (definition) => {
+            registered.push({ tabType: definition })
+            return () => {}
+          },
+        }
+      }
+      if (name === 'sidebarRight') {
+        return {
+          openTab: (kind) => {
+            registered.push({ opened: kind })
+          },
+        }
+      }
+      return undefined
+    },
+    on: () => () => {},
+  }
+  return { ctx, registered, injected, effects }
+}
+
+test('the plugin registers a right-sidebar tab when the services exist', () => {
+  const { ctx, registered, injected, effects } = sidebarHarness()
+  // A fresh module instance registers from scratch (the live-page handoff is
+  // what a *reload* does, and other tests exercise that path).
+  delete globalThis[Symbol.for('@mailly/dsh/client-runtime')]
+  const second = []
+  globalThis.window = { __ModuleLoader__: { load: (spec) => second.push(spec) } }
+  new Function('window', read())(globalThis.window)
+  const reloaded = second[0].factory((name) => {
+    if (name === 'react') return React
+    throw new Error(`unexpected require(${name})`)
+  })
+  reloaded.apply(ctx)
+
+  const tabType = registered.find((entry) => entry.tabType)
+  assert.ok(tabType, 'a tab type is registered')
+  assert.equal(tabType.tabType.kind, 'mailly')
+  assert.equal(tabType.tabType.id, '@mailly/dsh')
+  assert.equal(tabType.tabType.keepMounted, true)
+  assert.equal(typeof tabType.tabType.title, 'function')
+
+  const body = registered.find((entry) => entry.options && entry.options.name === 'sidebar.right.pane.tab')
+  assert.ok(body, 'the tab body is registered')
+  assert.equal(body.options.key, '@mailly/dsh')
+
+  const title = registered.find(
+    (entry) => entry.options && entry.options.name === 'sidebar.right.pane.tab.title',
+  )
+  assert.ok(title, 'the tab title is registered')
+
+  const header = registered.find(
+    (entry) => entry.options && entry.options.name === 'conversation.session.header.actions',
+  )
+  assert.ok(header, 'the session header entry point is registered')
+  assert.equal(header.options.id, 'mailly')
+
+  // The tab type registration is an effect, so it leaves with the plugin.
+  assert.ok(effects.length >= 1)
+  assert.ok(injected.includes('sidebar.right.pane.tab'))
+})
+
+test('the plugin still works when the right sidebar is absent', () => {
+  const registered = []
+  const ctx = {
+    locale: { register: () => () => {}, bind: () => (key) => key, getLocale: () => ({ active: 'zh' }) },
+    slots: {
+      inject: (key, callback) => {
+        callback()
+        return () => {}
+      },
+      register: (options, component) => {
+        registered.push({ options, component })
+        return () => {}
+      },
+    },
+    effect: () => () => {},
+    get: () => undefined,
+    on: () => () => {},
+  }
+  delete globalThis[Symbol.for('@mailly/dsh/client-runtime')]
+  const second = []
+  globalThis.window = { __ModuleLoader__: { load: (spec) => second.push(spec) } }
+  new Function('window', read())(globalThis.window)
+  const reloaded = second[0].factory((name) => {
+    if (name === 'react') return React
+    throw new Error(`unexpected require(${name})`)
+  })
+  reloaded.apply(ctx)
+
+  // The full page is still there; no sidebar tab is attempted.
+  assert.ok(registered.some((entry) => entry.options && entry.options.name === 'main'))
+  assert.equal(
+    registered.some((entry) => entry.options && entry.options.name === 'sidebar.right.pane.tab'),
+    false,
+  )
+})

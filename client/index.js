@@ -53,6 +53,15 @@ window.__ModuleLoader__.load({
       agentPanelNoThread: 'Open a conversation to work on it with the agent.',
       showImages: 'Show images',
       hideImages: 'Hide images',
+      sbBack: 'Back',
+      sbEmptyList: 'No conversations yet.',
+      sbEmptyReader: 'Pick a conversation to read it.',
+      sbLoadFailed: 'Could not load this conversation.',
+      sbHandOff: 'Send to agent',
+      sbHandedOff: 'Queued for the agent in this conversation.',
+      sbHandOffFailed: 'Could not reach the agent.',
+      sbNoSession: 'This tab needs an open conversation.',
+      sbOpenInbox: 'Open the full inbox',
       emailFrameTitle: 'Email body',
       setupTitle: 'Connect Mailly',
       changeKey: 'Change key',
@@ -157,6 +166,15 @@ window.__ModuleLoader__.load({
       agentPanelNoThread: '先打开一封邮件，再让 agent 处理。',
       showImages: '显示图片',
       hideImages: '隐藏图片',
+      sbBack: '返回',
+      sbEmptyList: '还没有会话。',
+      sbEmptyReader: '选择一封邮件开始阅读。',
+      sbLoadFailed: '这封邮件加载失败。',
+      sbHandOff: '交给 agent',
+      sbHandedOff: '已排入当前会话，agent 会接着处理。',
+      sbHandOffFailed: '没能连上 agent。',
+      sbNoSession: '这个标签页需要一个已打开的会话。',
+      sbOpenInbox: '打开完整收件箱',
       emailFrameTitle: '邮件正文',
       setupTitle: '连接 Mailly',
       changeKey: '更换凭据',
@@ -2187,6 +2205,641 @@ p{margin:0 0 .7em}
       )
     }
 
+    // ---------------------------------------------------------------------
+    // Right-sidebar tab
+    //
+    // The same Host routes, rendered as one narrow column beside the
+    // conversation: a list that drills into a reader, no agent panel (the
+    // conversation is right there), and "send to agent" queues the hand-off
+    // prompt into this Session instead of opening another one.
+
+    const TAB_ID = '@mailly/dsh'
+    const TAB_KIND = 'mailly'
+
+    const SIDEBAR_CSS = `
+.ml-sb{display:flex;flex-direction:column;height:100%;min-height:0;font-size:13px;line-height:1.5;color:var(--dsw-alias-label-primary)}
+.ml-sb-bar{flex:0 0 auto;display:flex;align-items:center;gap:6px;padding:8px 10px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.ml-sb-bar .ml-input{flex:1 1 auto;min-width:0;height:28px}
+.ml-sb-list{flex:1 1 auto;min-height:0;overflow-y:auto}
+.ml-sb-row{display:block;width:100%;text-align:left;padding:9px 12px;border:0;border-bottom:1px solid var(--dsw-alias-border-l1);background:transparent;color:inherit;font:inherit;cursor:pointer}
+.ml-sb-row:hover{background:var(--dsw-alias-bg-layer-2)}
+.ml-sb-row-top{display:flex;gap:8px;align-items:baseline;justify-content:space-between;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.ml-sb-from{font-weight:600;color:var(--dsw-alias-label-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:70%}
+.ml-sb-subject{font-weight:600;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ml-sb-snippet{color:var(--dsw-alias-label-secondary);font-size:11.5px;margin-top:2px;overflow:hidden;display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical}
+.ml-sb-reader{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
+.ml-sb-head{flex:0 0 auto;padding:8px 10px;border-bottom:1px solid var(--dsw-alias-border-l1);display:flex;flex-direction:column;gap:4px}
+.ml-sb-title{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ml-sb-meta{font-size:11px;color:var(--dsw-alias-label-secondary);display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.ml-sb-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:10px}
+.ml-sb-msg{border:1px solid var(--dsw-alias-border-l1);border-radius:9px;padding:9px 10px;margin-bottom:8px;background:var(--dsw-alias-bg-layer-1)}
+.ml-sb-msg-out{border-style:dashed;background:var(--dsw-alias-bg-layer-2)}
+.ml-sb-msg-head{display:flex;gap:6px;flex-wrap:wrap;align-items:baseline;font-size:11px;color:var(--dsw-alias-label-secondary);margin-bottom:5px}
+.ml-sb-msg-from{font-weight:600;color:var(--dsw-alias-label-primary)}
+.ml-sb-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.ml-sb-note{font-size:11.5px;color:var(--dsw-alias-label-secondary);padding:6px 0}
+.ml-sb-error{font-size:11.5px;color:var(--dsw-alias-state-error-primary);padding:4px 0}
+.ml-sb-ok{font-size:11.5px;color:var(--dsw-alias-state-success-primary);padding:4px 0}
+.ml-sb-draft{border:1px solid var(--dsw-alias-border-l2);border-radius:9px;padding:9px 10px;margin-bottom:8px;background:var(--dsw-alias-bg-layer-2)}
+.ml-sb-draft-head{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-size:11px;color:var(--dsw-alias-label-secondary)}
+.ml-sb-draft-body{white-space:pre-wrap;word-break:break-word;font-size:12.5px;margin:5px 0}
+.ml-sb-review{border:1px solid var(--dsw-alias-brand-primary);border-radius:9px;padding:9px 10px;margin-bottom:8px;display:flex;flex-direction:column;gap:6px}
+.ml-sb-review-text{white-space:pre-wrap;word-break:break-word;font-size:12.5px;background:var(--dsw-alias-bg-base);border-radius:7px;padding:8px;max-height:200px;overflow:auto}
+.ml-sb-check{display:flex;gap:6px;align-items:flex-start;font-size:11.5px;color:var(--dsw-alias-label-secondary);cursor:pointer}
+.ml-sb-compose{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-top:1px solid var(--dsw-alias-border-l1)}
+.ml-sb-compose textarea{width:100%;box-sizing:border-box;min-height:84px;resize:vertical;padding:8px;border-radius:8px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-base);color:inherit;font:inherit;font-size:12.5px;line-height:1.5;outline:none}
+.ml-sb-compose textarea:focus{border-color:var(--dsw-alias-brand-primary)}
+`
+
+    function sidebarErrorMessage(error) {
+      return error && error.message ? error.message : String(error)
+    }
+
+    /** The Mailly tab: list drills into a reader, all inside one column. */
+    function MaillySidebarBody(props) {
+      const t = typeof props?.translate === 'function' ? props.translate : (key) => key
+      const sessionId = props?.sessionId || ''
+      const locale = typeof props?.getLocale === 'function' ? props.getLocale() : 'zh'
+
+      const [status, setStatus] = useState(null)
+      const [threads, setThreads] = useState([])
+      const [listLoading, setListLoading] = useState(false)
+      const [listError, setListError] = useState('')
+      const [query, setQuery] = useState('')
+      const [openId, setOpenId] = useState('')
+      const [thread, setThread] = useState(null)
+      const [threadLoading, setThreadLoading] = useState(false)
+      const [threadError, setThreadError] = useState('')
+      const [composeOpen, setComposeOpen] = useState(false)
+      const [draftText, setDraftText] = useState('')
+      const [busy, setBusy] = useState(false)
+      const [notice, setNotice] = useState('')
+      const [noticeOk, setNoticeOk] = useState(false)
+      const [sending, setSending] = useState(null)
+      const [sendError, setSendError] = useState('')
+      const [emailImages, setEmailImages] = useState({})
+      const [emailHeights, setEmailHeights] = useState({})
+      const frameTimers = useRef([])
+      const queryRef = useRef('')
+
+      useEffect(() => {
+        return () => {
+          for (const handle of frameTimers.current.splice(0)) clearTimeout(handle)
+        }
+      }, [])
+
+      const loadThreads = useCallback(async (search) => {
+        const text = typeof search === 'string' ? search : queryRef.current
+        setListLoading(true)
+        setListError('')
+        try {
+          const suffix = text ? `&q=${encodeURIComponent(text)}` : ''
+          const data = await api(`/threads?limit=40${suffix}`)
+          setThreads(Array.isArray(data.threads) ? data.threads : [])
+        } catch (error) {
+          if (error && error.status === 401) {
+            setStatus((current) => (current ? { ...current, configured: false } : current))
+          } else {
+            setListError(sidebarErrorMessage(error))
+          }
+        } finally {
+          setListLoading(false)
+        }
+      }, [])
+
+      useEffect(() => {
+        let cancelled = false
+        ;(async () => {
+          try {
+            const data = await api('/status')
+            if (cancelled) return
+            setStatus(data)
+            if (data.configured) await loadThreads('')
+          } catch (error) {
+            if (!cancelled) setListError(sidebarErrorMessage(error))
+          }
+        })()
+        return () => {
+          cancelled = true
+        }
+      }, [loadThreads])
+
+      useEffect(() => {
+        queryRef.current = query
+        const handle = setTimeout(() => loadThreads(query), 280)
+        return () => clearTimeout(handle)
+      }, [query, loadThreads])
+
+      const openThread = useCallback(async (threadId) => {
+        setOpenId(threadId)
+        setThread(null)
+        setThreadLoading(true)
+        setThreadError('')
+        setComposeOpen(false)
+        setDraftText('')
+        setNotice('')
+        setSending(null)
+        setSendError('')
+        try {
+          const data = await api(`/thread?id=${encodeURIComponent(threadId)}`)
+          setThread(data)
+        } catch (error) {
+          setThreadError(sidebarErrorMessage(error))
+        } finally {
+          setThreadLoading(false)
+        }
+      }, [])
+
+      const closeThread = useCallback(() => {
+        setOpenId('')
+        setThread(null)
+        setThreadError('')
+        setComposeOpen(false)
+        setDraftText('')
+        setNotice('')
+        setSending(null)
+        setSendError('')
+      }, [])
+
+      const measure = (key, frame) => {
+        const run = () => {
+          const next = frameHeightOf(frame)
+          if (next <= 0) return
+          setEmailHeights((current) => (current[key] === next ? current : { ...current, [key]: next }))
+        }
+        for (const delay of MEASURE_DELAYS) {
+          const handle = setTimeout(run, delay)
+          frameTimers.current.push(handle)
+        }
+        if (frameTimers.current.length > 240) frameTimers.current.splice(0, frameTimers.current.length - 240)
+      }
+
+      const renderBody = (message) => {
+        const html = typeof message.html === 'string' ? message.html : ''
+        if (!html) return h('div', { className: 'ml-msg-body' }, message.body || '')
+        const key = `sb-${message.id || message.receivedAt}`
+        const hasImages = /<img\b/i.test(html)
+        const allowImages = emailImages[key] !== false
+        return h(
+          'div',
+          { className: 'ml-msg-html' },
+          h('iframe', {
+            className: 'ml-msg-frame',
+            sandbox: 'allow-same-origin',
+            referrerPolicy: 'no-referrer',
+            srcDoc: emailFrameDocument(html, allowImages),
+            style: { height: `${emailHeights[key] || 200}px` },
+            onLoad: (event) => measure(key, event && event.target),
+            title: t('emailFrameTitle'),
+          }),
+          hasImages
+            ? h(
+                'button',
+                {
+                  className: 'ml-btn ml-btn-ghost ml-msg-images',
+                  onClick: () =>
+                    setEmailImages((current) => ({ ...current, [key]: allowImages ? false : true })),
+                },
+                allowImages ? t('hideImages') : t('showImages'),
+              )
+            : null,
+        )
+      }
+
+      const saveDraft = useCallback(async () => {
+        const messages = thread && Array.isArray(thread.messages) ? thread.messages : []
+        const anchor = anchorMessageOf(thread) || messages[messages.length - 1]
+        if (!anchor || !anchor.id || !draftText.trim()) return
+        setBusy(true)
+        setNotice('')
+        try {
+          await api('/drafts', { method: 'POST', body: { anchor_email_id: anchor.id, text: draftText } })
+          setDraftText('')
+          setComposeOpen(false)
+          if (thread) await openThread(thread.threadId)
+          setNoticeOk(true)
+          setNotice(t('draftSaved'))
+        } catch (error) {
+          setNoticeOk(false)
+          setNotice(sidebarErrorMessage(error))
+        } finally {
+          setBusy(false)
+        }
+      }, [thread, draftText, openThread, t])
+
+      const confirmSend = useCallback(async () => {
+        const shown = sending
+        if (!shown || !shown.reviewed || busy || !thread) return
+        setBusy(true)
+        setSendError('')
+        try {
+          let fresh
+          try {
+            fresh = await api(`/thread?id=${encodeURIComponent(thread.threadId)}`)
+          } catch (error) {
+            setSendError(fill(t('sendFailed'), { error: sidebarErrorMessage(error) }))
+            return
+          }
+          const current = findDraft(fresh, shown.id)
+          if (!draftMatches(shown, current)) {
+            setThread(fresh)
+            setSending(null)
+            setNoticeOk(false)
+            setNotice(t(current ? 'sendChanged' : 'draftNotPending'))
+            return
+          }
+          try {
+            await api(`/drafts/${encodeURIComponent(shown.id)}/approve`, {
+              method: 'POST',
+              body: { revision: shown.revision, text: shown.text },
+            })
+          } catch (error) {
+            const key = sendErrorKey(error)
+            setSending(null)
+            await openThread(thread.threadId)
+            setNoticeOk(false)
+            setNotice(key ? t(key) : fill(t('sendFailed'), { error: sidebarErrorMessage(error) }))
+            return
+          }
+          setSending(null)
+          await openThread(thread.threadId)
+          setNoticeOk(true)
+          setNotice(t('sendDone'))
+        } finally {
+          setBusy(false)
+        }
+      }, [sending, busy, thread, openThread, t])
+
+      const discardDraft = useCallback(
+        async (draft) => {
+          if (!draft || !thread) return
+          setBusy(true)
+          try {
+            await api(`/drafts/${encodeURIComponent(draft.id)}/discard`, {
+              method: 'POST',
+              body: { revision: draft.revision },
+            })
+            await openThread(thread.threadId)
+            setNoticeOk(false)
+            setNotice(t('discardDone'))
+          } catch (error) {
+            setNoticeOk(false)
+            setNotice(error && error.status === 409 ? t('discardChanged') : sidebarErrorMessage(error))
+          } finally {
+            setBusy(false)
+          }
+        },
+        [thread, openThread, t],
+      )
+
+      // The conversation is right here, so the hand-off queues its prompt into
+      // this Session instead of opening another one.
+      const handOff = useCallback(async () => {
+        if (!thread || !sessionId) return
+        setBusy(true)
+        setNotice('')
+        try {
+          await api('/agent/prompt', {
+            method: 'POST',
+            body: { session_id: sessionId, text: buildMailPrompt(thread, t) },
+          })
+          setNoticeOk(true)
+          setNotice(t('sbHandedOff'))
+        } catch (error) {
+          setNoticeOk(false)
+          setNotice(t('sbHandOffFailed'))
+        } finally {
+          setBusy(false)
+        }
+      }, [thread, sessionId, t])
+
+      if (!status || !status.configured) {
+        return h(
+          'div',
+          { className: 'ml-sb' },
+          h('style', null, SIDEBAR_CSS),
+          h(
+            'div',
+            { className: 'ml-sb-scroll' },
+            h('div', { className: 'ml-sb-note' }, t('setupBody')),
+            h(
+              'button',
+              {
+                className: 'ml-btn ml-btn-primary',
+                onClick: () => {
+                  try {
+                    const layout = props?.openInbox
+                    if (typeof layout === 'function') layout()
+                  } catch {
+                    // The main panel is optional.
+                  }
+                },
+              },
+              t('sbOpenInbox'),
+            ),
+          ),
+        )
+      }
+
+      const list = h(
+        'div',
+        { className: 'ml-sb-list' },
+        !threads.length && !listLoading ? h('div', { className: 'ml-sb-note' }, t('sbEmptyList')) : null,
+        threads.map((row) =>
+          h(
+            'button',
+            { key: row.threadId, className: 'ml-sb-row', onClick: () => openThread(row.threadId) },
+            h(
+              'div',
+              { className: 'ml-sb-row-top' },
+              h(
+                'span',
+                { className: 'ml-sb-from' },
+                row.unreadCount ? h('span', { className: 'ml-dot', 'aria-hidden': true }) : null,
+                senderLabel(row.latest),
+              ),
+              h('span', null, formatWhen(row.lastReceivedAt, locale)),
+            ),
+            h('div', { className: 'ml-sb-subject' }, (row.latest && row.latest.subject) || '(no subject)'),
+            h('div', { className: 'ml-sb-snippet' }, (row.latest && row.latest.snippet) || ''),
+          ),
+        ),
+        listLoading ? h('div', { className: 'ml-sb-note' }, t('loading')) : null,
+        listError ? h('div', { className: 'ml-sb-error' }, listError) : null,
+      )
+
+      const reader = (() => {
+        if (threadLoading) return h('div', { className: 'ml-sb-scroll' }, h('div', { className: 'ml-sb-note' }, t('loading')))
+        if (threadError) return h('div', { className: 'ml-sb-scroll' }, h('div', { className: 'ml-sb-error' }, threadError))
+        if (!thread) return h('div', { className: 'ml-sb-scroll' }, h('div', { className: 'ml-sb-note' }, t('sbEmptyReader')))
+
+        const messages = Array.isArray(thread.messages) ? thread.messages : []
+        const drafts = Array.isArray(thread.drafts) ? thread.drafts : []
+        const subject = (messages.length && messages[0].subject) || ''
+
+        return h(
+          'div',
+          { className: 'ml-sb-reader' },
+          h(
+            'div',
+            { className: 'ml-sb-head' },
+            h(
+              'div',
+              { className: 'ml-sb-actions' },
+              h('button', { className: 'ml-btn ml-btn-ghost', onClick: closeThread }, `← ${t('sbBack')}`),
+            ),
+            h('div', { className: 'ml-sb-title', title: subject }, subject || '(no subject)'),
+            h(
+              'div',
+              { className: 'ml-sb-meta' },
+              h('span', null, `${messages.length} ${t('messages')}`),
+              thread.olderMessagesOmitted ? h('span', { className: 'ml-badge' }, t('messageOmitted')) : null,
+            ),
+            h(
+              'div',
+              { className: 'ml-sb-actions' },
+              h(
+                'button',
+                { className: 'ml-btn-agent', onClick: handOff, disabled: busy || !sessionId },
+                h(MaillyIcon, { size: 13 }),
+                t('sbHandOff'),
+              ),
+              h(
+                'button',
+                {
+                  className: 'ml-btn',
+                  onClick: () => {
+                    setComposeOpen((open) => !open)
+                    setNotice('')
+                  },
+                },
+                t('compose'),
+              ),
+            ),
+          ),
+          h(
+            'div',
+            { className: 'ml-sb-scroll' },
+            notice ? h('div', { className: noticeOk ? 'ml-sb-ok' : 'ml-sb-note' }, notice) : null,
+            composeOpen
+              ? h(
+                  'div',
+                  { className: 'ml-sb-compose' },
+                  h('div', { className: 'ml-sb-note' }, t('composeHint')),
+                  h('textarea', {
+                    value: draftText,
+                    placeholder: t('composePlaceholder'),
+                    onChange: (event) => setDraftText(event.target.value),
+                    'aria-label': t('composePlaceholder'),
+                  }),
+                  h(
+                    'div',
+                    { className: 'ml-sb-actions' },
+                    h(
+                      'button',
+                      { className: 'ml-btn ml-btn-primary', disabled: busy || !draftText.trim(), onClick: saveDraft },
+                      busy ? t('loading') : t('saveDraft'),
+                    ),
+                    h(
+                      'button',
+                      {
+                        className: 'ml-btn ml-btn-ghost',
+                        onClick: () => {
+                          setComposeOpen(false)
+                          setDraftText('')
+                        },
+                      },
+                      t('cancel'),
+                    ),
+                  ),
+                )
+              : null,
+            messages.map((message) =>
+              h(
+                'section',
+                {
+                  key: message.id || `${message.receivedAt}`,
+                  className: `ml-sb-msg${message.direction === 'outbound' ? ' ml-sb-msg-out' : ''}`,
+                },
+                h(
+                  'div',
+                  { className: 'ml-sb-msg-head' },
+                  h(
+                    'span',
+                    { className: 'ml-sb-msg-from' },
+                    message.direction === 'outbound'
+                      ? senderLabel(message) || 'you'
+                      : message.fromName || message.fromAddress || 'unknown',
+                  ),
+                  h('span', null, formatWhen(message.receivedAt, locale)),
+                  Array.isArray(message.attachments) && message.attachments.length
+                    ? h('span', { className: 'ml-badge' }, `${message.attachments.length}`)
+                    : null,
+                ),
+                renderBody(message),
+              ),
+            ),
+            drafts.length
+              ? h(
+                  'div',
+                  null,
+                  h('div', { className: 'ml-section-title' }, t('savedDrafts')),
+                  drafts.map((draft) => {
+                    const pending = (draft.status || 'pending') === 'pending'
+                    const reviewing = sending && String(sending.id) === String(draft.id)
+                    return h(
+                      'div',
+                      { key: draft.id || String(draft.revision), className: 'ml-sb-draft' },
+                      h(
+                        'div',
+                        { className: 'ml-sb-draft-head' },
+                        h('span', null, `${draft.id || 'draft'} · r${draft.revision ?? '?'}`),
+                        h('span', { className: 'ml-badge' }, draft.status || 'pending'),
+                      ),
+                      h('div', { className: 'ml-sb-draft-body' }, draft.text || ''),
+                      reviewing
+                        ? h(
+                            'div',
+                            { className: 'ml-sb-review' },
+                            h('div', { className: 'ml-sb-note' }, t('composeHint')),
+                            h('div', { className: 'ml-sb-review-text' }, draft.text || ''),
+                            h(
+                              'label',
+                              { className: 'ml-sb-check' },
+                              h('input', {
+                                type: 'checkbox',
+                                checked: Boolean(sending.reviewed),
+                                onChange: (event) =>
+                                  setSending((current) =>
+                                    current ? { ...current, reviewed: Boolean(event.target.checked) } : current,
+                                  ),
+                              }),
+                              h('span', null, t('reviewConfirm')),
+                            ),
+                            sendError ? h('div', { className: 'ml-sb-error' }, sendError) : null,
+                            h(
+                              'div',
+                              { className: 'ml-sb-actions' },
+                              h(
+                                'button',
+                                {
+                                  className: 'ml-btn ml-btn-primary',
+                                  disabled: busy || !sending.reviewed,
+                                  onClick: confirmSend,
+                                },
+                                busy ? t('loading') : t('sendNow'),
+                              ),
+                              h(
+                                'button',
+                                { className: 'ml-btn ml-btn-ghost', onClick: () => setSending(null) },
+                                t('sendCancel'),
+                              ),
+                            ),
+                          )
+                        : h(
+                            'div',
+                            { className: 'ml-sb-actions' },
+                            pending && canSend(status)
+                              ? h(
+                                  'button',
+                                  {
+                                    className: 'ml-btn ml-btn-primary',
+                                    disabled: busy,
+                                    onClick: () => {
+                                      setSending({
+                                        id: String(draft.id),
+                                        revision: draft.revision,
+                                        text: draft.text || '',
+                                        reviewed: false,
+                                      })
+                                      setSendError('')
+                                      setNotice('')
+                                    },
+                                  },
+                                  t('reviewSend'),
+                                )
+                              : null,
+                            draft.reviewUrl
+                              ? h(
+                                  'a',
+                                  {
+                                    className: 'ml-link',
+                                    href: draft.reviewUrl,
+                                    target: '_blank',
+                                    rel: 'noreferrer',
+                                  },
+                                  t('reviewInMailly'),
+                                )
+                              : null,
+                            h(
+                              'button',
+                              { className: 'ml-btn ml-btn-ghost', disabled: busy, onClick: () => discardDraft(draft) },
+                              t('discard'),
+                            ),
+                          ),
+                    )
+                  }),
+                )
+              : null,
+          ),
+        )
+      })()
+
+      return h(
+        'div',
+        { className: 'ml-sb' },
+        h('style', null, SIDEBAR_CSS),
+        h(
+          'div',
+          { className: 'ml-sb-bar' },
+          h('input', {
+            className: 'ml-input',
+            value: query,
+            placeholder: t('search'),
+            onChange: (event) => setQuery(event.target.value),
+            'aria-label': t('search'),
+          }),
+          h(
+            'button',
+            {
+              className: 'ml-btn ml-btn-ghost',
+              onClick: () => loadThreads(query),
+              disabled: listLoading,
+            },
+            t('refresh'),
+          ),
+        ),
+        openId ? reader : list,
+      )
+    }
+
+    /** The tab chip's text. */
+    function MaillyTabTitle() {
+      return 'Mailly'
+    }
+
+    /** Session-header button that opens the tab. */
+    function MaillyHeaderAction(props) {
+      const t = typeof props?.translate === 'function' ? props.translate : (key) => key
+      const open = props?.open
+      return h(
+        'button',
+        {
+          className: 'ml-btn ml-btn-ghost',
+          title: t('nav'),
+          'aria-label': t('nav'),
+          onClick: () => {
+            try {
+              if (typeof open === 'function') open()
+            } catch {
+              // Opening is best effort.
+            }
+          },
+        },
+        h(MaillyIcon, { size: 16 }),
+      )
+    }
+
     /** The page component for one activation's context and translator. */
     function makePageComponent(ctx, translate) {
       return function MaillyPage(props) {
@@ -2297,15 +2950,6 @@ p{margin:0 0 .7em}
         disposers.push(ctx.locale.register('mailly', 'en', EN))
         disposers.push(ctx.locale.register('mailly', 'zh', ZH))
 
-        disposers.push(
-          ctx.slots.inject('sidebar.panellist', () =>
-            ctx.slots.register(
-              { name: 'sidebar.panellist', id: 'mailly', order: 20, label: () => translate('nav') },
-              MaillyIcon,
-            ),
-          ),
-        )
-
         // The page is a swappable reference: a reloaded bundle replaces the
         // component behind it, so the rendered page picks up new code without
         // re-registering the slot.
@@ -2330,6 +2974,86 @@ p{margin:0 0 .7em}
             ),
           ),
         )
+
+        // The right-sidebar tab: the same mail, beside the conversation. Both
+        // services are optional so a profile without the right sidebar keeps
+        // the full page working.
+        const sidebarTabs = (() => {
+          try {
+            return ctx.get('sidebarRightTabs')
+          } catch {
+            return undefined
+          }
+        })()
+        const sidebarRight = (() => {
+          try {
+            return ctx.get('sidebarRight')
+          } catch {
+            return undefined
+          }
+        })()
+        if (sidebarTabs && sidebarRight && typeof sidebarTabs.register === 'function') {
+          disposers.push(
+            ctx.effect(
+              () =>
+                sidebarTabs.register({
+                  id: TAB_ID,
+                  kind: TAB_KIND,
+                  title: () => translate('nav'),
+                  keepMounted: true,
+                }),
+              'mailly: sidebar tab type',
+            ),
+          )
+          disposers.push(
+            ctx.slots.inject('sidebar.right.pane.tab', () =>
+              ctx.slots.register(
+                { name: 'sidebar.right.pane.tab', key: TAB_ID, locale: 'mailly' },
+                (slotProps) =>
+                  h(MaillySidebarBody, {
+                    ...slotProps,
+                    translate,
+                    getLocale: () => {
+                      try {
+                        return String(ctx.locale.getLocale().active || 'zh')
+                      } catch {
+                        return 'zh'
+                      }
+                    },
+                  }),
+              ),
+            ),
+          )
+          disposers.push(
+            ctx.slots.inject('sidebar.right.pane.tab.title', () =>
+              ctx.slots.register({ name: 'sidebar.right.pane.tab.title', key: TAB_ID }, MaillyTabTitle),
+            ),
+          )
+          disposers.push(
+            ctx.slots.inject('conversation.session.header.actions', () =>
+              ctx.slots.register(
+                {
+                  name: 'conversation.session.header.actions',
+                  id: 'mailly',
+                  order: 40,
+                  label: () => translate('nav'),
+                },
+                (slotProps) =>
+                  h(MaillyHeaderAction, {
+                    ...slotProps,
+                    translate,
+                    open: () => {
+                      try {
+                        sidebarRight.openTab(TAB_KIND)
+                      } catch {
+                        // No Session on screen: nothing to open beside.
+                      }
+                    },
+                  }),
+              ),
+            ),
+          )
+        }
     }
   },
 })
