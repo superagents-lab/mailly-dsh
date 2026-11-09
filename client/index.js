@@ -616,7 +616,7 @@ window.__ModuleLoader__.load({
     function prefetchThreads(rows) {
       const pending = []
       for (const row of rows) {
-        if (pending.length >= 4) break
+        if (pending.length >= 3) break
         if (!row || !row.threadId || readCachedThread(row.threadId)) continue
         pending.push(row.threadId)
       }

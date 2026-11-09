@@ -748,6 +748,8 @@ test('a draft that changed after review is refused and re-shown', async () => {
     draftAfterOpen: { id: 'd1', revision: 4, status: 'pending', text: '改过的正文' },
   })
   const { settle } = mountWorkbench()
+  // Let the list's background prefetch settle before the user acts.
+  await new Promise((resolve) => setTimeout(resolve, 250))
   let tree = await settle()
   byClass(tree, 'ml-row')[0].props.onClick()
   tree = await settle()
