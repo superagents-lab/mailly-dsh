@@ -861,7 +861,9 @@ window.__ModuleLoader__.load({
           setStatus((current) => (current ? { ...current, configured: true } : current))
           // Warm the visible conversations in the background so opening one is
           // instant. Failures are ignored: the real fetch still runs on click.
-          if (!options.refreshOnly) prefetchThreads(rows)
+          // A test harness can switch the background warm-up off; the page
+          // itself always runs it.
+          if (!options.refreshOnly && !globalThis.__MAILLY_NO_PREFETCH) prefetchThreads(rows)
         } catch (error) {
           if (error.status === 401) {
             setStatus((current) => (current ? { ...current, configured: false, source: 'none' } : current))

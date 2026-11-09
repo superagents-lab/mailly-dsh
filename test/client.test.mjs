@@ -744,14 +744,13 @@ test('send needs the review toggle and posts the exact revision and text', async
 })
 
 test('a draft that changed after review is refused and re-shown', async () => {
+  // This test controls which draft version the page sees, so the list's
+  // background warm-up stays off for it.
+  globalThis.__MAILLY_NO_PREFETCH = true
   const { calls } = sendFetch({
     draftAfterOpen: { id: 'd1', revision: 4, status: 'pending', text: '改过的正文' },
   })
   const { settle } = mountWorkbench()
-  // Let the list's background prefetch finish before the user acts, so the
-  // panel's "shown" version is the draft version this test controls.
-  await new Promise((resolve) => setTimeout(resolve, 300))
-  await settle(2)
   const stopTimers = () => {
     for (const handle of intervals.splice(0)) clearInterval(handle)
   }
@@ -769,6 +768,7 @@ test('a draft that changed after review is refused and re-shown', async () => {
   assert.match(textOf(tree), /草稿在你审核后发生了变化/)
   assert.match(textOf(tree), /改过的正文/)
   stopTimers()
+  globalThis.__MAILLY_NO_PREFETCH = false
 })
 
 test('a 409 from the Host is shown as "the draft changed"', async () => {
