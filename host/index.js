@@ -942,18 +942,35 @@ async function startAgentSession(req, res, ctx) {
   const threads = await readSessionMap()
   let sessionId = threads[threadId]
   if (!sessionId) {
-    const created = await sessionController.create({ agentPreset: 'standard' })
-    sessionId = created.sessionId
+    try {
+      const created = await sessionController.create(
+        { agentPreset: 'standard' },
+        AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      )
+      sessionId = created.sessionId
+    } catch (error) {
+      send(res, 502, { error: 'agent_session_failed', detail: messageOf(error) })
+      return
+    }
     threads[threadId] = sessionId
     await writeSessionMap(threads)
   }
   if (prompt) {
-    await sessionController.prompt({
-      requestId: randomUUID(),
-      sessionId,
-      mode: 'queue',
-      content: [{ type: 'text', text: prompt }],
-    })
+    try {
+      await sessionController.prompt(
+        {
+          requestId: randomUUID(),
+          sessionId,
+          mode: 'queue',
+          content: [{ type: 'text', text: prompt }],
+        },
+        AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      )
+    } catch (error) {
+      // The session exists; report the prompt failure without losing it.
+      send(res, 502, { error: 'agent_prompt_failed', detail: messageOf(error), sessionId, threadId })
+      return
+    }
   }
   send(res, 200, { sessionId, threadId })
 }
@@ -982,12 +999,15 @@ async function promptAgentSession(req, res, ctx) {
     return
   }
   try {
-    await sessionController.prompt({
-      requestId: randomUUID(),
-      sessionId,
-      mode: 'queue',
-      content: [{ type: 'text', text: text.slice(0, 8000) }],
-    })
+    await sessionController.prompt(
+      {
+        requestId: randomUUID(),
+        sessionId,
+        mode: 'queue',
+        content: [{ type: 'text', text: text.slice(0, 8000) }],
+      },
+      AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    )
   } catch (error) {
     send(res, 502, { error: 'agent_prompt_failed', detail: messageOf(error) })
     return
