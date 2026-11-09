@@ -136,9 +136,10 @@ because Mailly refuses loopback webhook URLs, so a laptop-only Host needs no pub
 A linked checkout is read on every activation, so a code change goes live without restarting DeepSeek
 Harness: turn the bundle off and on in **Plugins**, or let the Harness reload it. The Host route handler
 dispatches through a process-wide runtime that each activation repoints, so a reloaded plugin answers with
-the new code even if an earlier activation left its route behind; the browser side hands a reloaded bundle
-to the page that is already running it instead of registering the sidebar twice. Only a change to the
-package's own `package.json` or to the Harness itself needs a restart.
+the new code even if an earlier activation left its route behind. The browser side hands a reloaded bundle
+to the page that is already running it and re-registers the same sidebar and page slots without disposing
+anything, so a reload never leaves the page without its entry. Only a change to the package's own
+`package.json` or to the Harness itself needs a restart.
 
 ## Develop
 
