@@ -774,7 +774,14 @@ test('a draft that changed after review is refused and re-shown', async () => {
   byText(tree, '立即发送').props.onClick()
   tree = await settle(20)
 
-  assert.equal(calls.filter((call) => /\/approve$/.test(call.path)).length, 0, 'must not call approve')
+  const approveCalls = calls.filter((call) => /\/approve$/.test(call.path))
+  assert.equal(
+    approveCalls.length,
+    0,
+    `must not call approve; thread reads: ${calls.filter((call) => call.path.includes('/thread?id=')).length}, approve bodies: ${JSON.stringify(
+      approveCalls.map((call) => call.options.body),
+    )}`,
+  )
   assert.match(textOf(tree), /草稿在你审核后发生了变化/)
   assert.match(textOf(tree), /改过的正文/)
   stopTimers()
