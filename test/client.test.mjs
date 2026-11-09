@@ -677,6 +677,9 @@ test('a Host without the device routes falls back to the key card', async () => 
 // Two-step human-only send
 
 function sendFetch({ approveStatus = 200, approveError = 'unexpected', draftAfterOpen, threadAfterApprove, noPrefetch = false } = {}) {
+  // The page's background warm-up only makes the first thread read happen
+  // earlier; the changed-draft test therefore answers by call count, not by
+  // which read was "first".
   if (noPrefetch) globalThis.__MAILLY_NO_PREFETCH = true
   else delete globalThis.__MAILLY_NO_PREFETCH
   const calls = []
@@ -692,8 +695,12 @@ function sendFetch({ approveStatus = 200, approveError = 'unexpected', draftAfte
     if (path.includes('/threads?')) return ok(THREADS_PAYLOAD)
     if (path.includes('/thread?id=')) {
       draftFetches += 1
-      if (draftFetches === 1) return ok(threadPayload({ drafts: [draft] }))
-      if (draftAfterOpen) return ok(threadPayload({ drafts: [draftAfterOpen] }))
+      if (draftAfterOpen) {
+        // Every read after the first one the page performs returns the
+        // changed draft: whichever read the panel compared against, the
+        // version it shows no longer matches.
+        return ok(threadPayload({ drafts: [draftFetches === 1 ? draft : draftAfterOpen] }))
+      }
       return ok(threadPayload({ drafts: [draft] }))
     }
     if (/\/drafts\/d1\/approve$/.test(path)) {
