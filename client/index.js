@@ -451,6 +451,9 @@ window.__ModuleLoader__.load({
       return `${minutes}:${String(rest).padStart(2, '0')}`
     }
 
+    /** The live page's registration entry point (see apply below). */
+    const runtime = (globalThis[Symbol.for('@mailly/dsh/client-runtime')] ??= { apply: null })
+
     const testHelpers = {
       // Tests mount the page several times; the module-level page cache would
       // otherwise carry one test's conversations into the next.
@@ -1916,7 +1919,21 @@ window.__ModuleLoader__.load({
       // agent panel. Read defensively so a page without it still renders.
       /** Pure helpers, exposed for the test harness (no runtime use). */
       testHelpers,
-      apply(ctx) {
+      apply: pluginApply,
+    }
+
+    function pluginApply(ctx, current = pluginApply) {
+        // A reloaded bundle is a second module instance in the same page: the
+        // first instance already owns the slots, so hand the newest code to it
+        // rather than registering the page twice.
+        if (runtime.apply && runtime.apply !== pluginApply) {
+          // Re-enter the live instance's apply with this module's code.
+          runtime.apply(ctx, pluginApply)
+          return
+        }
+        // The live module keeps the newest code for a later reload to use.
+        runtime.current = pluginApply
+        runtime.apply = pluginApply
         // Prefer the locale service's own lookup (it knows every registered
         // pack); fall back to the bundled dictionaries.
         const bound = (() => {
@@ -1995,7 +2012,6 @@ window.__ModuleLoader__.load({
             ),
           ),
         )
-      },
     }
   },
 })

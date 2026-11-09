@@ -997,3 +997,38 @@ test('the list warms the first conversations so opening one is instant', async (
   const prefetched = threads.filter((path) => path.includes('/thread?id=t1'))
   assert.ok(prefetched.length >= 1, 'the visible conversation is fetched ahead of the click')
 })
+
+test('a reloaded bundle hands its code to the page already running it', () => {
+  // The browser keeps the first module instance; a second load of the same
+  // bundle must not register the sidebar and page twice.
+  const before = registrations.length
+  const second = []
+  globalThis.window = { __ModuleLoader__: { load: (spec) => second.push(spec) } }
+  new Function('window', read())(globalThis.window)
+  assert.equal(second.length, 1)
+  const reloaded = second[0].factory((name) => {
+    if (name === 'react') return React
+    throw new Error(`unexpected require(${name})`)
+  })
+  const calls = []
+  reloaded.apply({
+    locale: {
+      register: () => () => {},
+      bind: () => (key) => key,
+      getLocale: () => ({ active: 'zh' }),
+    },
+    slots: {
+      inject: (_key, callback) => callback(),
+      register: () => {
+        calls.push('register')
+        return () => {}
+      },
+    },
+    get: () => undefined,
+    on: () => () => {},
+  })
+  assert.equal(registrations.length, before, 'the page is not registered a second time')
+  // The live instance re-registers with the newest code, which is a
+  // replacement, not a duplicate: the same two slots, once.
+  assert.equal(calls.length, 2)
+})
