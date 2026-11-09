@@ -676,7 +676,9 @@ test('a Host without the device routes falls back to the key card', async () => 
 // ---------------------------------------------------------------------------
 // Two-step human-only send
 
-function sendFetch({ approveStatus = 200, approveError = 'unexpected', draftAfterOpen, threadAfterApprove } = {}) {
+function sendFetch({ approveStatus = 200, approveError = 'unexpected', draftAfterOpen, threadAfterApprove, noPrefetch = false } = {}) {
+  if (noPrefetch) globalThis.__MAILLY_NO_PREFETCH = true
+  else delete globalThis.__MAILLY_NO_PREFETCH
   const calls = []
   // The list prefetches the visible conversation, so the panel's "shown"
   // version is the first answer that carries a draft — not simply the first
@@ -744,11 +746,11 @@ test('send needs the review toggle and posts the exact revision and text', async
 })
 
 test('a draft that changed after review is refused and re-shown', async () => {
-  // This test controls which draft version the page sees, so the list's
-  // background warm-up stays off for it.
-  globalThis.__MAILLY_NO_PREFETCH = true
+  // This test controls which draft version the page sees, so it never warms
+  // the list in the background (a second thread fetch would change it).
   const { calls } = sendFetch({
     draftAfterOpen: { id: 'd1', revision: 4, status: 'pending', text: '改过的正文' },
+    noPrefetch: true,
   })
   const { settle } = mountWorkbench()
   const stopTimers = () => {
@@ -768,7 +770,6 @@ test('a draft that changed after review is refused and re-shown', async () => {
   assert.match(textOf(tree), /草稿在你审核后发生了变化/)
   assert.match(textOf(tree), /改过的正文/)
   stopTimers()
-  globalThis.__MAILLY_NO_PREFETCH = false
 })
 
 test('a 409 from the Host is shown as "the draft changed"', async () => {
