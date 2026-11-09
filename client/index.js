@@ -3170,22 +3170,14 @@ p{margin:0 0 .7em}
     }
 
     function pluginApply(ctx, current = pluginApply) {
-        // Every activation registers from scratch. A newer bundle may replace
-        // an older one while the older one's registrations are still live, so
-        // drop those first: they would otherwise shadow this activation or be
-        // removed later, taking the new entries with them.
-        if (runtime.apply && runtime.apply !== pluginApply && runtime.live) {
-          try {
-            runtime.cleanup?.()
-          } catch {
-            // The previous registrations are already gone.
-          }
-        }
+        // Every activation registers from scratch. Cordis disposes the previous
+        // fiber's registrations before this one starts, so there is nothing to
+        // adopt: skipping registration here is what made a reload leave the
+        // page with no Mailly entry at all.
         runtime.current = pluginApply
         runtime.apply = pluginApply
         runtime.ctx = ctx
         runtime.sidebarBody = MaillySidebarBody
-        runtime.live = true
         // Prefer the locale service's own lookup (it knows every registered
         // pack); fall back to the bundled dictionaries.
         const bound = (() => {
@@ -3214,7 +3206,6 @@ p{margin:0 0 .7em}
 
         const disposers = []
         runtime.cleanup = () => {
-          runtime.live = false
           for (const dispose of disposers.splice(0)) {
             try {
               dispose()
