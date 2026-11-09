@@ -155,7 +155,14 @@ function resetHooks() {
 }
 
 /** Render the workbench once, running any effects whose deps changed. */
-function mountWorkbench({ keepCache = false } = {}) {
+// The page warms the visible conversations in the background. Tests that
+// control draft versions switch that off; the dedicated warm-up test turns it
+// back on.
+globalThis.__MAILLY_NO_PREFETCH = true
+
+function mountWorkbench({ keepCache = false, prefetch = false } = {}) {
+  if (prefetch) delete globalThis.__MAILLY_NO_PREFETCH
+  else globalThis.__MAILLY_NO_PREFETCH = true
   // The page keeps a module-level cache so returning to it paints instantly;
   // each mount starts from an empty one unless a test simulates a return visit.
   if (!keepCache && plugin.testHelpers && typeof plugin.testHelpers.resetPageCache === 'function') {
@@ -680,8 +687,6 @@ function sendFetch({ approveStatus = 200, approveError = 'unexpected', draftAfte
   // The page's background warm-up only makes the first thread read happen
   // earlier; the changed-draft test therefore answers by call count, not by
   // which read was "first".
-  if (noPrefetch) globalThis.__MAILLY_NO_PREFETCH = true
-  else delete globalThis.__MAILLY_NO_PREFETCH
   const calls = []
   // The list prefetches the visible conversation, so the panel's "shown"
   // version is the first answer that carries a draft — not simply the first
@@ -984,7 +989,7 @@ test('the list warms the first conversations so opening one is instant', async (
     if (path.includes('/thread?id=')) return ok(threadPayload())
     return fail(404, `unexpected ${path}`)
   }
-  const { settle } = mountWorkbench()
+  const { settle } = mountWorkbench({ prefetch: true })
   await settle()
   // The prefetch is scheduled off the first paint; give it a moment.
   await new Promise((resolve) => setTimeout(resolve, 300))
