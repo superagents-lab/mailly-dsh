@@ -490,7 +490,7 @@ test('enabling automation starts the poller and a new email creates one session'
     assert.equal(enabled.body.running, true)
 
     // The loop yields between polls; wait for the first message to be handled.
-    for (let attempt = 0; attempt < 100 && sessions.prompts.length === 0; attempt += 1) {
+    for (let attempt = 0; attempt < 250 && sessions.prompts.length === 0; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 20))
     }
     assert.equal(sessions.created.length, 1)

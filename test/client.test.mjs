@@ -136,7 +136,12 @@ function resetHooks() {
 }
 
 /** Render the workbench once, running any effects whose deps changed. */
-function mountWorkbench() {
+function mountWorkbench({ keepCache = false } = {}) {
+  // The page keeps a module-level cache so returning to it paints instantly;
+  // each mount starts from an empty one unless a test simulates a return visit.
+  if (!keepCache && plugin.testHelpers && typeof plugin.testHelpers.resetPageCache === 'function') {
+    plugin.testHelpers.resetPageCache()
+  }
   const main = registrations.find((entry) => entry.options.name === 'main')
   const outer = main.component({})
   const workbench = outer.children[0].type
@@ -829,3 +834,42 @@ test('no send control without send scope, and never in the agent prompt', async 
   assert.match(prompt, /不要发送/)
   assert.doesNotMatch(prompt, /approve|发送这封|send/i)
 })
+
+// ---------------------------------------------------------------------------
+// Instant return and the embedded agent panel
+
+test('returning to the page paints the cached list before Mailly answers', async () => {
+  let releaseThreads
+  let gated = false
+  const gate = new Promise((resolve) => {
+    releaseThreads = resolve
+  })
+  globalThis.fetch = async (url) => {
+    const path = String(url)
+    if (path.endsWith('/status')) return ok({ ...STATUS_FILE, source: 'device', email: 'wang@example.com' })
+    if (path.includes('/threads?')) {
+      if (gated) await gate
+      return ok(THREADS_PAYLOAD)
+    }
+    if (path.includes('/thread?id=')) return ok(threadPayload())
+    return fail(404, `unexpected ${path}`)
+  }
+  const first = mountWorkbench()
+  let tree = await first.settle()
+  assert.equal(byClass(tree, 'ml-row').length, 1, 'first visit loads the list')
+  byClass(tree, 'ml-row')[0].props.onClick()
+  tree = await first.settle()
+
+  // Leave the panel and come back: the list must already be there while the
+  // refresh is still in flight. The first mount stays mounted so the shared
+  // cache is not reset by the second one.
+  gated = true
+  const second = mountWorkbench({ keepCache: true })
+  tree = second.renderOnce()
+  assert.equal(byClass(tree, 'ml-row').length, 1, 'cached list paints on the first render')
+  assert.match(textOf(tree), /预算确认/)
+  releaseThreads()
+  tree = await second.settle()
+  assert.equal(byClass(tree, 'ml-row').length, 1)
+})
+

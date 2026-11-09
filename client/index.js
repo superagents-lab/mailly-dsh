@@ -43,6 +43,14 @@ window.__ModuleLoader__.load({
       askAgent: 'Hand to agent',
       agentStarted: 'New session opened with the task filled in — press Enter there to run it.',
       agentUnavailable: 'The session service is unavailable on this page.',
+      agentPanelTitle: 'Agent',
+      agentPanelHint: 'This conversation stays open beside the agent. Ask it to read the mail and draft a reply; you review before anything is sent.',
+      agentPanelPlaceholder: 'Ask the agent about this conversation…',
+      agentPanelSend: 'Ask',
+      agentPanelOpen: 'Open agent panel',
+      agentPanelClose: 'Close agent panel',
+      agentPanelUnavailable: 'The agent panel needs the DSH conversation surface, which this page does not provide.',
+      agentPanelNoThread: 'Open a conversation to work on it with the agent.',
       setupTitle: 'Connect Mailly',
       changeKey: 'Change key',
       changeKeyHint: 'Clears the credential stored on this machine and shows the connect card again.',
@@ -125,6 +133,14 @@ window.__ModuleLoader__.load({
       askAgent: '让 agent 处理',
       agentStarted: '已新建会话并填好任务，按回车即可开始。',
       agentUnavailable: '当前页面拿不到会话服务。',
+      agentPanelTitle: 'Agent',
+      agentPanelHint: '会话留在旁边，让 agent 读这封邮件并起草回复；发送前仍由你审核。',
+      agentPanelPlaceholder: '就这封邮件问 agent…',
+      agentPanelSend: '发送',
+      agentPanelOpen: '打开 agent 面板',
+      agentPanelClose: '收起 agent 面板',
+      agentPanelUnavailable: 'agent 面板需要 DSH 的对话组件，当前页面没有提供。',
+      agentPanelNoThread: '先打开一封邮件，再让 agent 处理。',
       setupTitle: '连接 Mailly',
       changeKey: '更换凭据',
       changeKeyHint: '清除本机保存的凭据，重新显示连接卡片。',
@@ -237,6 +253,14 @@ window.__ModuleLoader__.load({
 .ml-link:hover{text-decoration:underline}
 .ml-badge{font-size:11px;padding:1px 6px;border-radius:6px;background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l1)}
 .ml-dot{width:6px;height:6px;border-radius:3px;background:var(--dsw-alias-brand-primary);display:inline-block;margin-right:5px;vertical-align:middle}
+.ml-agent{flex:0 0 380px;min-width:0;min-height:0;display:flex;flex-direction:column;border-left:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1)}
+.ml-agent-head{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--dsw-alias-border-l1)}
+.ml-agent-title{font-weight:600;font-size:13px;margin-right:auto}
+.ml-agent-host{flex:1 1 auto;min-height:0;overflow:auto;display:flex;flex-direction:column}
+.ml-agent-empty{color:var(--dsw-alias-label-secondary);font-size:12px;padding:16px 14px}
+.ml-agent-compose{flex:0 0 auto;display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--dsw-alias-border-l1)}
+.ml-agent-compose .ml-input{flex:1 1 auto;min-width:0}
+.ml-btn-ghost.ml-agent-close{font-size:16px;line-height:1;padding:0 8px}
 .ml-section-title{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary);margin:4px 0 8px}
 .ml-signin{display:flex;flex-direction:column;gap:10px;padding:14px;border:1px solid var(--dsw-alias-border-l1);border-radius:10px;background:var(--dsw-alias-bg-layer-2)}
 .ml-signin-step{font-size:12px;font-weight:600;color:var(--dsw-alias-label-secondary)}
@@ -426,6 +450,14 @@ window.__ModuleLoader__.load({
     }
 
     const testHelpers = {
+      // Tests mount the page several times; the module-level page cache would
+      // otherwise carry one test's conversations into the next.
+      resetPageCache() {
+        PAGE_CACHE.status = null
+        PAGE_CACHE.threads = null
+        PAGE_CACHE.threadId = ''
+        THREADS.length = 0
+      },
       draftMatches,
       findDraft,
       replyRecipient,
@@ -549,6 +581,32 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+    // Page cache
+    //
+    // Session state does not survive leaving the Mailly panel, so the page
+    // keeps its last answers here: a return visit paints the conversation list
+    // and the last opened conversation immediately, then refreshes in the
+    // background. Nothing here is authoritative — every entry is replaced by
+    // the next fetch.
+
+    const PAGE_CACHE = { status: null, threads: null, thread: null, threadId: '', at: 0 }
+    const THREAD_CACHE_LIMIT = 8
+    const THREADS = []
+
+    function cacheThread(threadId, payload) {
+      if (!threadId || !payload) return
+      const index = THREADS.findIndex((entry) => entry.threadId === threadId)
+      if (index !== -1) THREADS.splice(index, 1)
+      THREADS.unshift({ threadId, payload, at: Date.now() })
+      if (THREADS.length > THREAD_CACHE_LIMIT) THREADS.length = THREAD_CACHE_LIMIT
+    }
+
+    function readCachedThread(threadId) {
+      const hit = THREADS.find((entry) => entry.threadId === threadId)
+      return hit ? hit.payload : null
+    }
+
+    // ---------------------------------------------------------------------
     // Sidebar icon
 
     function MaillyIcon(props) {
@@ -609,18 +667,27 @@ window.__ModuleLoader__.load({
       const text = typeof props?.translate === 'function' ? props.translate : (key) => key
       const locale = typeof props?.getLocale === 'function' ? props.getLocale() : 'zh'
       const uiWorkspace = props?.uiWorkspace
+      // A surface is only usable when it is a render function; anything else
+      // (the harness hands the page a placeholder) falls back to the plain
+      // handoff.
+      const agentSurface = (() => {
+        for (const candidate of [props?.agentSurface, props?.conversationSurface]) {
+          if (typeof candidate === 'function') return candidate
+        }
+        return null
+      })()
 
-      const [status, setStatus] = useState(null)
+      const [status, setStatus] = useState(() => PAGE_CACHE.status)
       const [bootError, setBootError] = useState('')
       const [keyInput, setKeyInput] = useState('')
       const [connecting, setConnecting] = useState(false)
       const [connectError, setConnectError] = useState('')
-      const [threads, setThreads] = useState([])
+      const [threads, setThreads] = useState(() => (PAGE_CACHE.threads ? PAGE_CACHE.threads.threads : []))
       const [listLoading, setListLoading] = useState(false)
       const [listError, setListError] = useState('')
       const [query, setQuery] = useState('')
-      const [selectedId, setSelectedId] = useState('')
-      const [thread, setThread] = useState(null)
+      const [selectedId, setSelectedId] = useState(() => PAGE_CACHE.threadId || '')
+      const [thread, setThread] = useState(() => readCachedThread(PAGE_CACHE.threadId))
       const [threadLoading, setThreadLoading] = useState(false)
       const [threadError, setThreadError] = useState('')
       const [composerOpen, setComposerOpen] = useState(false)
@@ -645,12 +712,19 @@ window.__ModuleLoader__.load({
       const [discardBusy, setDiscardBusy] = useState(false)
       const [discardError, setDiscardError] = useState('')
 
+      // Embedded agent panel (the conversation stays on screen).
+      const [agentOpen, setAgentOpen] = useState(false)
+      const [agentInput, setAgentInput] = useState('')
+      const [agentBusy, setAgentBusy] = useState(false)
+      const [agentError, setAgentError] = useState('')
+
       const queryRef = useRef('')
       const searchTouched = useRef(false)
       const signInRef = useRef({ phase: 'idle', pollFailures: 0 })
       const signInActive = useRef(false)
       const mounted = useRef(true)
       const threadRef = useRef(null)
+      const agentPanelRef = useRef(null)
 
       useEffect(() => {
         mounted.current = true
@@ -659,14 +733,71 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
-      const refreshList = useCallback(async (searchText) => {
+      // Set when the user (or a restored visit) has opened a conversation, so
+      // the list refresh restores at most once per mount.
+      const openedOnce = useRef(false)
+      const selectedRef = useRef('')
+
+      const openThread = useCallback(async (threadId) => {
+        setSelectedId(threadId)
+        selectedRef.current = threadId
+        PAGE_CACHE.threadId = threadId
+        // Paint the last known version of this conversation at once; the
+        // refresh below replaces it as soon as Mailly answers. A cached copy
+        // is only a placeholder: the reader keeps its loading state until the
+        // fresh answer arrives, so a stale draft can never be acted on.
+        const cached = readCachedThread(threadId)
+        if (cached) {
+          threadRef.current = cached
+          setThread(cached)
+          setThreadLoading(true)
+        } else {
+          setThread(null)
+          setThreadLoading(true)
+        }
+        setThreadError('')
+        setComposerOpen(false)
+        setDraftText('')
+        setSaveError('')
+        setNotice('')
+        try {
+          const data = await api(`/thread?id=${encodeURIComponent(threadId)}`)
+          threadRef.current = data
+          setThread(data)
+          cacheThread(threadId, data)
+        } catch (error) {
+          if (!cached) setThread(null)
+          setThreadError(String(error.message || error))
+        } finally {
+          setThreadLoading(false)
+        }
+      }, [])
+
+      const refreshList = useCallback(async (searchText, options = {}) => {
         const search = typeof searchText === 'string' ? searchText : queryRef.current
         setListLoading(true)
         setListError('')
         try {
           const suffix = search ? `&q=${encodeURIComponent(search)}` : ''
           const data = await api(`/threads?limit=30${suffix}`)
-          setThreads(Array.isArray(data.threads) ? data.threads : [])
+          const rows = Array.isArray(data.threads) ? data.threads : []
+          setThreads(rows)
+          PAGE_CACHE.threads = { threads: rows, at: Date.now() }
+          // A fresh mount reopens the conversation the user left, once the
+          // list proves it still exists. Only when nothing is selected yet, so
+          // a manual or search refresh never reopens anything.
+          const wanted = PAGE_CACHE.threadId
+          if (
+            !options.refreshOnly &&
+            !openedOnce.current &&
+            !selectedRef.current &&
+            !search &&
+            wanted &&
+            rows.some((row) => row.threadId === wanted)
+          ) {
+            openedOnce.current = true
+            openThread(wanted)
+          }
           setStatus((current) => (current ? { ...current, configured: true } : current))
         } catch (error) {
           if (error.status === 401) {
@@ -677,27 +808,7 @@ window.__ModuleLoader__.load({
         } finally {
           setListLoading(false)
         }
-      }, [])
-
-      const openThread = useCallback(async (threadId) => {
-        setSelectedId(threadId)
-        setThreadLoading(true)
-        setThreadError('')
-        setComposerOpen(false)
-        setDraftText('')
-        setSaveError('')
-        setNotice('')
-        try {
-          const data = await api(`/thread?id=${encodeURIComponent(threadId)}`)
-          threadRef.current = data
-          setThread(data)
-        } catch (error) {
-          setThread(null)
-          setThreadError(String(error.message || error))
-        } finally {
-          setThreadLoading(false)
-        }
-      }, [])
+      }, [openThread])
 
       useEffect(() => {
         let cancelled = false
@@ -706,6 +817,7 @@ window.__ModuleLoader__.load({
             const data = await api('/status')
             if (cancelled) return
             setStatus(data)
+            PAGE_CACHE.status = data
             if (data.configured) await refreshList('')
           } catch (error) {
             if (!cancelled) setBootError(String(error.message || error))
@@ -719,7 +831,7 @@ window.__ModuleLoader__.load({
       useEffect(() => {
         queryRef.current = query
         if (!searchTouched.current || demo) return undefined
-        const handle = setTimeout(() => refreshList(query), 280)
+        const handle = setTimeout(() => refreshList(query, { refreshOnly: true }), 280)
         return () => clearTimeout(handle)
       }, [query, demo, refreshList])
 
@@ -1058,25 +1170,69 @@ window.__ModuleLoader__.load({
         }
       }, [thread, discarding, discardBusy, openThread, text])
 
-      const handToAgent = useCallback(() => {
+      // The agent panel keeps the conversation on screen: "Hand to agent"
+      // starts (or reuses) this conversation's session and shows it in the
+      // side panel instead of navigating away from the inbox.
+      const handToAgent = useCallback(async () => {
         if (!thread || demo) return
-        if (!uiWorkspace || typeof uiWorkspace.startSession !== 'function') {
-          setNoticeOk(false)
-          setNotice(text('agentUnavailable'))
-          return
-        }
+        setNotice('')
+        setNoticeOk(false)
         const messages = Array.isArray(thread.messages) ? thread.messages : []
         const subject = (messages[0] && messages[0].subject) || ''
         const prompt = String(text('prompt')).replace('{{thread}}', thread.threadId || '').replace('{{subject}}', subject)
+        const panel = agentPanelRef.current
+        if (panel && typeof panel.open === 'function') {
+          setAgentOpen(true)
+          try {
+            await panel.open({ prompt })
+            setAgentError('')
+            return
+          } catch (error) {
+            setAgentError(String(error.message || error))
+            return
+          }
+        }
+        if (!uiWorkspace || typeof uiWorkspace.startSession !== 'function') {
+          // Without a surface or a session service the panel still opens and
+          // explains itself; nothing navigates.
+          setAgentOpen(true)
+          setNotice(text('agentUnavailable'))
+          return
+        }
         try {
           uiWorkspace.startSession(undefined, { prompt, whenDraftExists: 'append' })
-          setNoticeOk(false)
           setNotice(text('agentStarted'))
         } catch (error) {
-          setNoticeOk(false)
           setNotice(String(error.message || error))
         }
       }, [thread, demo, uiWorkspace, text])
+
+      const askAgentPanel = useCallback(async () => {
+        const question = agentInput.trim()
+        const panel = agentPanelRef.current
+        if (!question || !panel || typeof panel.ask !== 'function') return
+        setAgentBusy(true)
+        setAgentError('')
+        try {
+          await panel.ask(question)
+          setAgentInput('')
+        } catch (error) {
+          setAgentError(String(error.message || error))
+        } finally {
+          setAgentBusy(false)
+        }
+      }, [agentInput])
+
+      // The surface is called directly: it is a render function supplied by
+      // the host page, and calling it (rather than rendering it as a component
+      // type) keeps the panel's imperative handle independent of that page.
+      const agentHost = agentSurface
+        ? agentSurface({
+            ref: agentPanelRef,
+            threadId: thread ? thread.threadId : '',
+            hint: text('agentPanelHint'),
+          })
+        : h('div', { className: 'ml-agent-empty' }, text(thread ? 'agentPanelUnavailable' : 'agentPanelNoThread'))
 
       const latestMessage = useMemo(() => {
         if (!thread || !Array.isArray(thread.messages) || !thread.messages.length) return null
@@ -1193,7 +1349,7 @@ window.__ModuleLoader__.load({
           {
             className: 'ml-btn ml-btn-ghost',
             onClick: () => {
-              if (!demo) refreshList(query)
+              if (!demo) refreshList(query, { refreshOnly: true })
             },
             disabled: demo || listLoading,
           },
@@ -1590,7 +1746,57 @@ window.__ModuleLoader__.load({
               ),
             )
           : null,
-        h('div', { className: 'ml-body' }, list, reader),
+        h(
+          'div',
+          { className: 'ml-body' },
+          list,
+          reader,
+          agentOpen
+            ? h(
+                'aside',
+                { className: 'ml-agent', 'aria-label': text('agentPanelTitle') },
+                h(
+                  'div',
+                  { className: 'ml-agent-head' },
+                  h('span', { className: 'ml-agent-title' }, text('agentPanelTitle')),
+                  h(
+                    'button',
+                    {
+                      className: 'ml-btn ml-btn-ghost',
+                      onClick: () => setAgentOpen(false),
+                      title: text('agentPanelClose'),
+                    },
+                    '×',
+                  ),
+                ),
+                h('div', { className: 'ml-agent-host' }, agentHost),
+                agentError ? h('div', { className: 'ml-error', style: { padding: '0 12px 8px' } }, agentError) : null,
+                h(
+                  'div',
+                  { className: 'ml-agent-compose' },
+                  h('input', {
+                    className: 'ml-input',
+                    value: agentInput,
+                    placeholder: text('agentPanelPlaceholder'),
+                    onChange: (event) => setAgentInput(event.target.value),
+                    onKeyDown: (event) => {
+                      if (event.key === 'Enter' && !agentBusy && agentInput.trim()) askAgentPanel()
+                    },
+                    'aria-label': text('agentPanelPlaceholder'),
+                  }),
+                  h(
+                    'button',
+                    {
+                      className: 'ml-btn ml-btn-primary',
+                      disabled: agentBusy || !agentInput.trim() || !thread,
+                      onClick: askAgentPanel,
+                    },
+                    agentBusy ? text('loading') : text('agentPanelSend'),
+                  ),
+                ),
+              )
+            : null,
+        ),
       )
     }
 
@@ -1604,6 +1810,9 @@ window.__ModuleLoader__.load({
 
     return {
       inject: ['slots', 'locale', 'uiWorkspace'],
+      // Optional: the host page's conversation surface, used for the embedded
+      // agent panel. Read defensively so a page without it still renders.
+      optional: ['conversationSurface'],
       /** Pure helpers, exposed for the test harness (no runtime use). */
       testHelpers,
       apply(ctx) {
@@ -1681,6 +1890,14 @@ window.__ModuleLoader__.load({
                   }
                 },
                 uiWorkspace: ctx.get('uiWorkspace'),
+                conversationSurface: (() => {
+                  try {
+                    const seat = ctx.get('conversationSurface')
+                    return seat && typeof seat === 'function' ? seat : null
+                  } catch {
+                    return null
+                  }
+                })(),
               }),
             ),
           ),

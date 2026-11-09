@@ -945,6 +945,8 @@ async function automationStatus() {
 
 async function handle(req, res, path, method, url) {
   if (method === 'GET' && path === '/status') {
+    // Cheap and local: never cached, so a credential written or removed by
+    // anything else (tests, a manual edit, the device flow) shows up at once.
     send(res, 200, await statusPayload())
     return
   }
