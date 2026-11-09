@@ -131,6 +131,15 @@ ring, hourly window) lives in `$DSH_HOME/mailly/automation.json` (mode 0600), so
 nor skips mail. At most five sessions start per hour; poll failures back off up to 60 s. Long polling is used
 because Mailly refuses loopback webhook URLs, so a laptop-only Host needs no public address.
 
+## Reloading while developing
+
+A linked checkout is read on every activation, so a code change goes live without restarting DeepSeek
+Harness: turn the bundle off and on in **Plugins**, or let the Harness reload it. The Host route handler
+dispatches through a process-wide runtime that each activation repoints, so a reloaded plugin answers with
+the new code even if an earlier activation left its route behind; the browser side hands a reloaded bundle
+to the page that is already running it instead of registering the sidebar twice. Only a change to the
+package's own `package.json` or to the Harness itself needs a restart.
+
 ## Develop
 
 ```
