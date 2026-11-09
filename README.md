@@ -159,8 +159,8 @@ Harness: turn the bundle off and on in **Plugins**, or let the Harness reload it
 - **Host code** (`host/*.js`) is live immediately: the route handler dispatches through a process-wide
   runtime that each activation repoints, so a reloaded plugin answers with the new code even if an earlier
   activation left its route behind.
-- **Client code** (`client/index.js`) hot-swaps the page: a reloaded bundle hands its page component to the
-  one already on screen, so the full inbox picks up new code without a page reload.
+- **Client code** (`client/index.js`) hot-swaps both views: a reloaded bundle hands its page component and
+  its sidebar-tab body to the ones already on screen, so both pick up new code without a page reload.
 - **A new slot registration** (a new sidebar entry, tab, or header button) needs one page reload, because the
   page's module loader keeps the instance that first registered the slots. Restart DeepSeek Harness once after
   adding one; later code changes in the same slots hot-swap as above.

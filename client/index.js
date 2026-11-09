@@ -521,7 +521,24 @@ window.__ModuleLoader__.load({
       apply: null,
       // Set by the live page: the component it currently renders.
       setPage: null,
+      // Every mounted host's state setter, so a reloaded bundle can make the
+      // live page re-render with its code.
+      bumps: new Set(),
+      // The sidebar tab body the live page currently renders.
+      sidebarBody: null,
     })
+    if (!runtime.bumps) runtime.bumps = new Set()
+
+    /** Re-render every mounted host (used when a reload swaps code in). */
+    function bumpHosts() {
+      for (const bump of [...runtime.bumps]) {
+        try {
+          bump((value) => value + 1)
+        } catch {
+          // A host that unmounted mid-iteration.
+        }
+      }
+    }
 
     const testHelpers = {
       // Tests mount the page several times; the module-level page cache would
@@ -922,12 +939,27 @@ p{margin:0 0 .7em}
       const [, setTick] = useState(0)
       useEffect(() => {
         renderTick = setTick
+        runtime.bumps.add(setTick)
         return () => {
+          runtime.bumps.delete(setTick)
           if (renderTick === setTick) renderTick = null
         }
       }, [])
       const Page = props.pageRef.current
       return h(Page, props.props)
+    }
+
+    /** Renders whichever sidebar body the live module currently owns. */
+    function SidebarHost(props) {
+      const [, setTick] = useState(0)
+      useEffect(() => {
+        runtime.bumps.add(setTick)
+        return () => {
+          runtime.bumps.delete(setTick)
+        }
+      }, [])
+      const Body = runtime.sidebarBody || MaillySidebarBody
+      return h(Body, props.slotProps)
     }
 
     // The slot renderer calls this component; the page inside it is rendered
@@ -3139,10 +3171,14 @@ p{margin:0 0 .7em}
           // A reloaded bundle: the page keeps the first module instance, so
           // hand it this module's page component. The page re-renders with the
           // new code (styles included) and no slot is registered twice.
+          // Hand this module's code to the live page: the full inbox and the
+          // sidebar tab both re-render from the new bundle.
+          runtime.sidebarBody = MaillySidebarBody
           if (typeof runtime.setPage === 'function') {
             const live = runtime.ctx || ctx
             const translate = runtime.translate || ((key) => key)
             runtime.setPage(makePageComponent(live, translate))
+            bumpHosts()
             return
           }
           // No live page to hand to yet: register normally below.
@@ -3151,6 +3187,7 @@ p{margin:0 0 .7em}
         runtime.current = pluginApply
         runtime.apply = pluginApply
         runtime.ctx = ctx
+        runtime.sidebarBody = MaillySidebarBody
         // Prefer the locale service's own lookup (it knows every registered
         // pack); fall back to the bundled dictionaries.
         const bound = (() => {
@@ -3197,7 +3234,9 @@ p{margin:0 0 .7em}
         const pageRef = { current: makePageComponent(ctx, translate) }
         runtime.setPage = (next) => {
           pageRef.current = next
-          renderTick((value) => value + 1)
+          // No host mounted yet (or already gone): the next mount renders it.
+          if (typeof renderTick === 'function') renderTick((value) => value + 1)
+          bumpHosts()
         }
         disposers.push(
           ctx.slots.inject('sidebar.panellist', () =>
@@ -3262,15 +3301,17 @@ p{margin:0 0 .7em}
               ctx.slots.register(
                 { name: 'sidebar.right.pane.tab', key: TAB_ID, locale: 'mailly' },
                 (slotProps) =>
-                  h(MaillySidebarBody, {
-                    ...slotProps,
-                    translate,
-                    getLocale: () => {
-                      try {
-                        return String(ctx.locale.getLocale().active || 'zh')
-                      } catch {
-                        return 'zh'
-                      }
+                  h(SidebarHost, {
+                    slotProps: {
+                      ...slotProps,
+                      translate,
+                      getLocale: () => {
+                        try {
+                          return String(ctx.locale.getLocale().active || 'zh')
+                        } catch {
+                          return 'zh'
+                        }
+                      },
                     },
                   }),
               ),

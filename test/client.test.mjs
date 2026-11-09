@@ -1579,3 +1579,24 @@ test('the mail frame follows the page palette and grows with its content', () =>
     assert.match(doc, /frame-src 'none'/)
   }
 })
+
+test('a reloaded bundle swaps the sidebar body as well as the page', () => {
+  const runtime = globalThis[Symbol.for('@mailly/dsh/client-runtime')]
+  const before = runtime.sidebarBody
+  const second = []
+  globalThis.window = { __ModuleLoader__: { load: (spec) => second.push(spec) } }
+  new Function('window', read())(globalThis.window)
+  const reloaded = second[0].factory((name) => {
+    if (name === 'react') return React
+    throw new Error(`unexpected require(${name})`)
+  })
+  reloaded.apply({
+    locale: { register: () => () => {}, bind: () => (key) => key, getLocale: () => ({ active: 'zh' }) },
+    slots: { inject: () => () => {}, register: () => () => {} },
+    get: () => undefined,
+    on: () => () => {},
+    effect: () => () => {},
+  })
+  assert.notEqual(runtime.sidebarBody, before, 'the live module now owns the new body')
+  assert.equal(typeof runtime.sidebarBody, 'function')
+})
