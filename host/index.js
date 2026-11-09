@@ -272,6 +272,110 @@ function htmlToText(html) {
     .trim()
 }
 
+// ---------------------------------------------------------------------------
+// Email HTML for the page
+//
+// Mail bodies are authored HTML, so the page can render them — but only after
+// this allowlist pass, and only inside a sandboxed frame the client builds.
+// The model never sees this markup: the tools keep using the plain text above.
+
+const HTML_LIMIT = 400_000
+const ALLOWED_TAGS = new Set([
+  'a', 'abbr', 'address', 'article', 'aside', 'b', 'blockquote', 'br', 'caption', 'center', 'cite',
+  'code', 'col', 'colgroup', 'dd', 'div', 'dl', 'dt', 'em', 'figcaption', 'figure', 'font', 'footer',
+  'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'header', 'hr', 'i', 'img', 'li', 'main', 'ol', 'p', 'pre', 's',
+  'section', 'small', 'span', 'strike', 'strong', 'sub', 'sup', 'table', 'tbody', 'td', 'tfoot', 'th',
+  'thead', 'tr', 'u', 'ul',
+])
+const VOID_TAGS = new Set(['br', 'col', 'hr', 'img'])
+const ALLOWED_ATTRS = new Set([
+  'align', 'alt', 'bgcolor', 'border', 'cellpadding', 'cellspacing', 'colspan', 'color', 'dir', 'face',
+  'height', 'href', 'lang', 'rel', 'rowspan', 'size', 'span', 'src', 'style', 'target', 'title', 'valign',
+  'width',
+])
+// Elements whose whole subtree is dropped, not just the tag.
+const DROP_ELEMENTS = /<(script|style|head|title|iframe|object|embed|form|svg|math|template|video|audio|noscript|frameset)\b[^>]*>[\s\S]*?<\/\1\s*>/gi
+const DROP_OPENERS = /<(script|style|head|title|iframe|object|embed|form|svg|math|template|video|audio|noscript|frameset)\b[^>]*>/gi
+const DROP_VOID = /<(input|link|meta|base|source|track|embed|area|param|frame)\b[^>]*>/gi
+const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9-]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/g
+const ATTR = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/g
+const STYLE_BLOCK = /(url\s*\(|expression\s*\(|javascript:|vbscript:|behavior\s*:|-moz-binding|position\s*:)/gi
+
+function decodeAttr(value) {
+  return String(value)
+    .replace(/&#x([0-9a-f]+);?/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16) || 63))
+    .replace(/&#(\d+);?/g, (_, dec) => String.fromCodePoint(Number.parseInt(dec, 10) || 63))
+    .replace(/&(amp|lt|gt|quot|apos|#39|#x27);/gi, (match, name) => decodeEntities(match) || name)
+}
+
+/** A URL that may survive: http(s), mailto, or an inline image. */
+function safeUrl(value, { image = false } = {}) {
+  const raw = decodeAttr(value).replace(/[\u0000-\u0020\u007f]+/g, '').toLowerCase()
+  if (!raw) return ''
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return value
+  if (!image && raw.startsWith('mailto:')) return value
+  if (image && /^data:image\/(png|jpe?g|gif|webp);base64,/.test(raw)) return value
+  return ''
+}
+
+function sanitizeAttributes(tag, raw) {
+  const kept = []
+  ATTR.lastIndex = 0
+  let match
+  while ((match = ATTR.exec(raw))) {
+    const name = match[1].toLowerCase()
+    const value = match[3] !== undefined ? match[3] : match[4] !== undefined ? match[4] : match[5]
+    if (!ALLOWED_ATTRS.has(name)) continue
+    if (name === 'style') {
+      if (STYLE_BLOCK.test(value)) continue
+      STYLE_BLOCK.lastIndex = 0
+      kept.push(`style="${value.replace(/"/g, '&quot;')}"`)
+      continue
+    }
+    if (name === 'href' || name === 'src') {
+      const url = safeUrl(value, { image: name === 'src' })
+      if (!url) continue
+      kept.push(`${name}="${url.replace(/"/g, '&quot;')}"`)
+      continue
+    }
+    if (name === 'target' || name === 'rel') continue
+    kept.push(`${name}="${String(value).replace(/"/g, '&quot;')}"`)
+  }
+  if (tag === 'a' && kept.some((attribute) => attribute.startsWith('href='))) {
+    kept.push('target="_blank"', 'rel="noopener noreferrer"')
+  }
+  return kept.length ? ` ${kept.join(' ')}` : ''
+}
+
+/**
+ * Allowlist pass over authored email HTML: dangerous elements lose their
+ * subtree, unknown elements lose only their tag, attributes and URLs are
+ * filtered, and links open outside the frame. Returns '' when nothing usable
+ * survives, so the page falls back to the plain text.
+ */
+function sanitizeEmailHtml(html) {
+  if (typeof html !== 'string' || !html.trim()) return ''
+  let out = html.slice(0, HTML_LIMIT)
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<!\[CDATA\[[\s\S]*?\]\]>/g, '')
+    .replace(/<![^>]*>/g, '')
+  out = out.replace(DROP_ELEMENTS, '').replace(DROP_OPENERS, '').replace(DROP_VOID, '')
+  out = out.replace(TAG, (match, closing, rawName, rawAttrs) => {
+    const name = rawName.toLowerCase()
+    if (!ALLOWED_TAGS.has(name)) return ''
+    if (closing) return `</${name}>`
+    if (VOID_TAGS.has(name)) return `<${name}${sanitizeAttributes(name, rawAttrs)}>`
+    return `<${name}${sanitizeAttributes(name, rawAttrs)}>`
+  })
+  return out.trim()
+}
+
+/** The message body as HTML when the mail carries a usable one. */
+function bodyHtml(message) {
+  if (!message || typeof message !== 'object') return ''
+  return sanitizeEmailHtml(message.html_body || message.body_html || '')
+}
+
 /** Body text for one message: stored plain text first, then derived from HTML. */
 function bodyText(message) {
   if (!message || typeof message !== 'object') return ''
@@ -323,6 +427,8 @@ function shapeMessage(message) {
     subject: message.subject || '',
     receivedAt: message.received_at || 0,
     body: bodyText(message),
+    // Sanitized authored HTML for the page; the model only ever gets `body`.
+    html: bodyHtml(message),
     attachments: shapeAttachments(message),
   }
 }

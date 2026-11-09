@@ -1090,3 +1090,74 @@ test('a reloaded bundle swaps the page the live host renders', () => {
     runtime.setPage = original
   }
 })
+
+test('a message with authored HTML renders in a sandboxed frame', async () => {
+  globalThis.fetch = async (url) => {
+    const path = String(url)
+    if (path.endsWith('/status')) return ok({ ...STATUS_FILE, source: 'device', email: 'wang@example.com' })
+    if (path.includes('/threads?')) return ok(THREADS_PAYLOAD)
+    if (path.includes('/thread?id=')) {
+      return ok(
+        threadPayload({
+          messages: [
+            {
+              id: 'm1',
+              direction: 'inbound',
+              fromName: 'OpenAI',
+              fromAddress: 'noreply@example.com',
+              toAddress: 'me@example.com',
+              subject: '权限更新',
+              receivedAt: 1_760_000_000,
+              body: '纯文本回退正文',
+              html: '<p>HTML <b>正文</b></p><img src="https://cdn.example/logo.png">',
+              attachments: [],
+            },
+          ],
+        }),
+      )
+    }
+    return fail(404, `unexpected ${path}`)
+  }
+  const { settle } = mountWorkbench()
+  let tree = await settle()
+  byClass(tree, 'ml-row')[0].props.onClick()
+  tree = await settle()
+
+  const frame = walk(tree).find((node) => node.type === 'iframe')
+  assert.ok(frame, 'the body renders in a frame')
+  assert.equal(frame.props.sandbox, 'allow-same-origin', 'no script permission')
+  assert.equal(frame.props.referrerPolicy, 'no-referrer')
+  assert.match(frame.props.srcDoc, /<b>正文<\/b>/)
+  // Remote images are blocked until the reader asks for them.
+  assert.match(frame.props.srcDoc, /img-src data:/)
+  assert.doesNotMatch(frame.props.srcDoc, /img-src [^"]*https:/)
+  assert.match(frame.props.srcDoc, /Content-Security-Policy/)
+  assert.match(frame.props.srcDoc, /default-src 'none'/)
+
+  // The plain text is not rendered twice; the frame carries the body.
+  assert.equal(byClass(tree, 'ml-msg-body').length, 0)
+
+  const show = byText(tree, '显示图片')
+  assert.ok(show, 'the image opt-in renders')
+  show.props.onClick()
+  tree = await settle()
+  const relaxed = walk(tree).find((node) => node.type === 'iframe')
+  assert.match(relaxed.props.srcDoc, /img-src https: http: data:/)
+})
+
+test('a message without HTML keeps the plain-text body', async () => {
+  globalThis.fetch = async (url) => {
+    const path = String(url)
+    if (path.endsWith('/status')) return ok({ ...STATUS_FILE, source: 'device', email: 'wang@example.com' })
+    if (path.includes('/threads?')) return ok(THREADS_PAYLOAD)
+    if (path.includes('/thread?id=')) return ok(threadPayload())
+    return fail(404, `unexpected ${path}`)
+  }
+  const { settle } = mountWorkbench()
+  let tree = await settle()
+  byClass(tree, 'ml-row')[0].props.onClick()
+  tree = await settle()
+  assert.equal(walk(tree).find((node) => node.type === 'iframe'), undefined)
+  assert.equal(byClass(tree, 'ml-msg-body').length, 2)
+  assert.match(textOf(tree), /第二封正文/)
+})

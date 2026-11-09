@@ -51,6 +51,8 @@ window.__ModuleLoader__.load({
       agentPanelClose: 'Close agent panel',
       agentPanelUnavailable: 'The agent panel needs the DSH conversation surface, which this page does not provide.',
       agentPanelNoThread: 'Open a conversation to work on it with the agent.',
+      showImages: 'Show images',
+      emailFrameTitle: 'Email body',
       setupTitle: 'Connect Mailly',
       changeKey: 'Change key',
       changeKeyHint: 'Clears the credential stored on this machine and shows the connect card again.',
@@ -141,6 +143,8 @@ window.__ModuleLoader__.load({
       agentPanelClose: '收起 agent 面板',
       agentPanelUnavailable: 'agent 面板需要 DSH 的对话组件，当前页面没有提供。',
       agentPanelNoThread: '先打开一封邮件，再让 agent 处理。',
+      showImages: '显示图片',
+      emailFrameTitle: '邮件正文',
       setupTitle: '连接 Mailly',
       changeKey: '更换凭据',
       changeKeyHint: '清除本机保存的凭据，重新显示连接卡片。',
@@ -243,6 +247,9 @@ window.__ModuleLoader__.load({
 .ml-msg-head{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap;font-size:12px;color:var(--dsw-alias-label-secondary);margin-bottom:6px}
 .ml-msg-from{font-weight:600;color:var(--dsw-alias-label-primary)}
 .ml-msg-body{white-space:pre-wrap;word-break:break-word;font-size:13px}
+.ml-msg-html{margin:2px 0 0}
+.ml-msg-frame{width:100%;border:0;display:block;border-radius:8px;background:#fff;overflow:hidden}
+.ml-msg-images{margin-top:6px;font-size:12px;height:26px}
 .ml-empty{color:var(--dsw-alias-label-secondary);padding:32px 24px;text-align:center;display:flex;flex-direction:column;gap:8px;align-items:center}
 .ml-banner{margin:12px 20px 0;padding:8px 12px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);color:var(--dsw-alias-state-warn-primary);font-size:12px;display:flex;gap:10px;align-items:center}
 .ml-error{color:var(--dsw-alias-state-error-primary);font-size:12px}
@@ -609,6 +616,58 @@ window.__ModuleLoader__.load({
     }
 
     // ---------------------------------------------------------------------
+    // Email HTML
+    //
+    // The Host hands the page authored mail HTML after an allowlist pass. It is
+    // rendered inside a frame with no script permission and a CSP that blocks
+    // remote loads, so a mail body cannot reach the app, the network, or the
+    // agent. Plain text stays the fallback and the only thing the model sees.
+
+    const EMAIL_FRAME_CSS = `
+html,body{margin:0;padding:0}
+body{background:#fff;color:#1f2328;font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-break:break-word;overflow-wrap:anywhere;padding:10px 12px}
+img{max-width:100%;height:auto}
+table{max-width:100%;border-collapse:collapse}
+td,th{max-width:100%;vertical-align:top}
+pre{white-space:pre-wrap;word-break:break-word}
+a{color:#0b62d6}
+blockquote{margin:0 0 0 10px;padding-left:10px;border-left:2px solid #d0d7de;color:#57606a}
+h1,h2,h3,h4{line-height:1.3;margin:.6em 0 .4em}
+p{margin:0 0 .7em}
+`
+
+    /** The sandboxed document for one mail body. */
+    function emailFrameDocument(html, allowImages) {
+      const csp = [
+        "default-src 'none'",
+        `img-src ${allowImages ? 'https: http: data:' : 'data:'}`,
+        "style-src 'unsafe-inline'",
+        'font-src data:',
+        "media-src 'none'",
+        "form-action 'none'",
+        "base-uri 'none'",
+        "frame-src 'none'",
+      ].join('; ')
+      return (
+        '<!doctype html><html><head><meta charset="utf-8">' +
+        `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
+        '<base target="_blank">' +
+        `<style>${EMAIL_FRAME_CSS}</style></head><body>${html}</body></html>`
+      )
+    }
+
+    /** Size a body frame to its content, once it has loaded. */
+    function frameHeightOf(frame) {
+      try {
+        const doc = frame && frame.contentDocument
+        const next = doc && doc.body ? doc.body.scrollHeight : 0
+        return next > 0 ? Math.min(Math.max(next + 4, 60), 1400) : 0
+      } catch {
+        return 0
+      }
+    }
+
+    // ---------------------------------------------------------------------
     // Page cache
     //
     // Session state does not survive leaving the Mailly panel, so the page
@@ -813,6 +872,11 @@ window.__ModuleLoader__.load({
       const [discarding, setDiscarding] = useState('')
       const [discardBusy, setDiscardBusy] = useState(false)
       const [discardError, setDiscardError] = useState('')
+
+      // Mail HTML: which bodies may load remote images, and their measured
+      // frame heights. Both are keyed by message id.
+      const [emailImages, setEmailImages] = useState({})
+      const [emailHeights, setEmailHeights] = useState({})
 
       // Embedded agent panel (the conversation stays on screen).
       const [agentOpen, setAgentOpen] = useState(false)
@@ -1359,6 +1423,46 @@ window.__ModuleLoader__.load({
         }
       }, [])
 
+      /**
+       * One message body: authored HTML in a sandboxed frame (no scripts, CSP
+       * blocks remote loads until the reader asks for images), else plain text.
+       */
+      const renderBody = (message) => {
+        const html = typeof message.html === 'string' ? message.html : ''
+        if (!html) return h('div', { className: 'ml-msg-body' }, message.body || '')
+        const key = message.id || `${message.receivedAt}-${message.subject}`
+        const allowImages = Boolean(emailImages[key])
+        const height = emailHeights[key] || 180
+        return h(
+          'div',
+          { className: 'ml-msg-html' },
+          h('iframe', {
+            className: 'ml-msg-frame',
+            // No scripts, no forms, no popups; same-origin only so the page can
+            // measure the body and size the frame to it.
+            sandbox: 'allow-same-origin',
+            referrerPolicy: 'no-referrer',
+            srcDoc: emailFrameDocument(html, allowImages),
+            style: { height: `${height}px` },
+            onLoad: (event) => {
+              const next = frameHeightOf(event && event.target)
+              if (next > 0) setEmailHeights((current) => ({ ...current, [key]: next }))
+            },
+            title: text('emailFrameTitle'),
+          }),
+          /<img\b/i.test(html) && !allowImages
+            ? h(
+                'button',
+                {
+                  className: 'ml-btn ml-btn-ghost ml-msg-images',
+                  onClick: () => setEmailImages((current) => ({ ...current, [key]: true })),
+                },
+                text('showImages'),
+              )
+            : null,
+        )
+      }
+
       const latestMessage = useMemo(() => {
         if (!thread || !Array.isArray(thread.messages) || !thread.messages.length) return null
         return thread.messages[thread.messages.length - 1]
@@ -1740,7 +1844,7 @@ window.__ModuleLoader__.load({
                       )
                     : null,
                 ),
-                h('div', { className: 'ml-msg-body' }, message.body || ''),
+                renderBody(message),
               ),
             ),
             drafts.length

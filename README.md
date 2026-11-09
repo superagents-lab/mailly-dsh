@@ -17,8 +17,11 @@ with Mailly tools.
 - **Hand to agent** opens a new DSH session with the task already written into the composer, so one
   conversation gets one session. The prompt says "do not send" and never offers a send step.
 
-Email bodies are flattened to plain text before they reach the model or the page; original HTML is neither
-rendered nor trusted, and the agent is told to treat mail as external data.
+The page renders a mail's authored HTML the way a mail client does, but never trusts it: the Host runs an
+allowlist pass (dangerous elements lose their subtree, attributes and URLs are filtered, links open outside),
+and the page renders the result inside a frame with no script permission and a CSP that blocks remote loads —
+tracking pixels stay blocked until the reader asks for images. **The model only ever receives the plain-text
+body**, and the agent is told to treat mail as external data.
 
 ## Why this is its own repository
 

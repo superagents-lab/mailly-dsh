@@ -698,3 +698,80 @@ test('the transcript reads the nested assistant shape and hides system context',
     wired.dispose()
   }
 })
+
+// ---------------------------------------------------------------------------
+// Email HTML for the page
+
+test('the thread route carries sanitized HTML next to the plain text', async () => {
+  // Later tests restore the real fetch, so this one installs its own fake.
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname
+    if (path === '/inbox/threads/t1') {
+      return reply({
+        success: true,
+        thread_id: 't1',
+        messages: [
+          { id: 'm1', direction: 'inbound', subject: 's', received_at: 1, text_body: '第一封正文' },
+          { id: 'm2', direction: 'inbound', subject: 's', received_at: 2, html_body: '<p>第二封<b>正文</b></p>' },
+        ],
+      })
+    }
+    if (path === '/mail-drafts') return reply({ success: true, drafts: [] })
+    return reply({ success: false, error: 'nope' }, 404)
+  }
+  const { status, body } = await send(harness.handler, { url: '/mailly-api/thread?id=t1' })
+  assert.equal(status, 200)
+  const [, second] = body.messages
+  // The model-facing text stays plain.
+  assert.equal(second.body, '第二封正文')
+  // The page gets markup it can render.
+  assert.match(second.html, /<b>正文<\/b>/)
+  globalThis.fetch = realFetch
+})
+
+test('sanitized HTML drops scripts, handlers and remote loads', async () => {
+  const dangerous = [
+    '<p>hi</p>',
+    '<script>alert(1)</script>',
+    '<img src="https://tracker.example/p.gif" onerror="alert(1)">',
+    '<a href="javascript:alert(1)">bad</a>',
+    '<a href="https://example.com/x">good</a>',
+    '<iframe src="https://evil.example"></iframe>',
+    '<style>body{background:url(https://evil.example/x)}</style>',
+    '<div style="position:fixed;background:url(https://evil.example/x)">styled</div>',
+    '<form action="https://evil.example"><input name="x"></form>',
+    '<table><tr><td>cell</td></tr></table>',
+  ].join('')
+  globalThis.fetch = async (url) => {
+    const path = new URL(String(url)).pathname
+    if (path === '/inbox/threads/t1') {
+      return reply({
+        success: true,
+        thread_id: 't1',
+        messages: [{ id: 'm9', direction: 'inbound', subject: 's', received_at: 1, html_body: dangerous }],
+      })
+    }
+    if (path === '/mail-drafts') return reply({ success: true, drafts: [] })
+    return reply({ success: false, error: 'nope' }, 404)
+  }
+  try {
+    const { body } = await send(harness.handler, { url: '/mailly-api/thread?id=t1' })
+    const html = body.messages[0].html
+    assert.doesNotMatch(html, /<script/i)
+    assert.doesNotMatch(html, /onerror/i)
+    assert.doesNotMatch(html, /javascript:/i)
+    assert.doesNotMatch(html, /<iframe/i)
+    assert.doesNotMatch(html, /<form|<input/i)
+    assert.doesNotMatch(html, /<style/i)
+    assert.doesNotMatch(html, /position\s*:/i)
+    assert.doesNotMatch(html, /url\s*\(/i)
+    // Ordinary mail markup survives.
+    assert.match(html, /<p>hi<\/p>/)
+    assert.match(html, /<table><tr><td>cell<\/td><\/tr><\/table>/)
+    assert.match(html, /href="https:\/\/example.com\/x"/)
+    assert.match(html, /target="_blank"/)
+    assert.match(html, /rel="noopener noreferrer"/)
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
