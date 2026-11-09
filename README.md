@@ -154,12 +154,18 @@ because Mailly refuses loopback webhook URLs, so a laptop-only Host needs no pub
 ## Reloading while developing
 
 A linked checkout is read on every activation, so a code change goes live without restarting DeepSeek
-Harness: turn the bundle off and on in **Plugins**, or let the Harness reload it. The Host route handler
-dispatches through a process-wide runtime that each activation repoints, so a reloaded plugin answers with
-the new code even if an earlier activation left its route behind. The browser side hands a reloaded bundle
-to the page that is already running it and re-registers the same sidebar and page slots without disposing
-anything, so a reload never leaves the page without its entry. Only a change to the package's own
-`package.json` or to the Harness itself needs a restart.
+Harness: turn the bundle off and on in **Plugins**, or let the Harness reload it.
+
+- **Host code** (`host/*.js`) is live immediately: the route handler dispatches through a process-wide
+  runtime that each activation repoints, so a reloaded plugin answers with the new code even if an earlier
+  activation left its route behind.
+- **Client code** (`client/index.js`) hot-swaps the page: a reloaded bundle hands its page component to the
+  one already on screen, so the full inbox picks up new code without a page reload.
+- **A new slot registration** (a new sidebar entry, tab, or header button) needs one page reload, because the
+  page's module loader keeps the instance that first registered the slots. Restart DeepSeek Harness once after
+  adding one; later code changes in the same slots hot-swap as above.
+
+Only a change to the package's own `package.json` or to the Harness itself always needs a restart.
 
 ## Develop
 
