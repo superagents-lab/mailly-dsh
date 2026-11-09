@@ -1569,9 +1569,14 @@ test('the mail frame follows the page palette and grows with its content', () =>
 
   const light = emailFrameDocument('<p>hi</p>', true, false)
   const dark = emailFrameDocument('<p>hi</p>', true, true)
+  // Mail is authored for a light page, so the body always sits on paper; the
+  // dark theme only softens it.
   assert.match(light, /background:#ffffff/)
-  assert.match(dark, /background:#1c1c20/)
-  assert.match(dark, /color:#e7e7ea/)
+  assert.match(dark, /background:#f4f4f6/)
+  assert.match(light, /color:#1f2328/)
+  assert.match(dark, /color:#1f2328/)
+  // Authored widths cannot escape the column.
+  assert.match(dark, /max-width:100% !important/)
   // The safety envelope is identical in both palettes.
   for (const doc of [light, dark]) {
     assert.match(doc, /default-src 'none'/)

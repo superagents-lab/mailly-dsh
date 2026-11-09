@@ -296,7 +296,8 @@ window.__ModuleLoader__.load({
 .ml-msg-from{font-weight:600;color:var(--dsw-alias-label-primary)}
 .ml-msg-body{white-space:pre-wrap;word-break:break-word;font-size:13px}
 .ml-msg-html{margin:2px 0 0}
-.ml-msg-frame{width:100%;border:0;display:block;border-radius:8px;background:transparent}
+.ml-msg-html{width:100%;max-width:100%;min-width:0}
+.ml-msg-frame{display:block;width:100%;max-width:100%;min-width:0;border:1px solid var(--dsw-alias-border-l1);border-radius:8px;background:#fff}
 .ml-msg-images{margin-top:6px;font-size:12px;height:26px}
 .ml-empty{color:var(--dsw-alias-label-secondary);padding:32px 24px;text-align:center;display:flex;flex-direction:column;gap:8px;align-items:center}
 .ml-banner{margin:12px 20px 0;padding:8px 12px;border-radius:8px;border:1px solid var(--dsw-alias-state-warn-primary);color:var(--dsw-alias-state-warn-primary);font-size:12px;display:flex;gap:10px;align-items:center}
@@ -695,17 +696,22 @@ window.__ModuleLoader__.load({
 
     /** The frame's own stylesheet, in the page's light or dark palette. */
     function emailFrameCss(dark) {
-      const paper = dark ? '#1c1c20' : '#ffffff'
-      const ink = dark ? '#e7e7ea' : '#1f2328'
-      const muted = dark ? '#a3a3ac' : '#57606a'
-      const rule = dark ? '#3a3a42' : '#d0d7de'
-      const link = dark ? '#79b8ff' : '#0b62d6'
+      // Mail HTML is authored for a light page and carries its own colours, so
+      // the body always sits on paper; a dark theme only softens the paper and
+      // adds a hairline so it does not glare.
+      const paper = dark ? '#f4f4f6' : '#ffffff'
+      const ink = '#1f2328'
+      const muted = '#57606a'
+      const rule = dark ? '#c9c9d1' : '#d0d7de'
+      const link = '#0b62d6'
       return `
-html,body{margin:0;padding:0}
+html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden}
 body{background:${paper};color:${ink};font:13px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;word-break:break-word;overflow-wrap:anywhere;padding:10px 12px}
-img{max-width:100%;height:auto}
-table{max-width:100%;border-collapse:collapse}
-td,th{max-width:100%;vertical-align:top}
+/* Authored mail often pins a desktop width; keep it inside the column. */
+body *{max-width:100% !important;box-sizing:border-box}
+img{max-width:100% !important;height:auto}
+table{max-width:100% !important;border-collapse:collapse}
+td,th{max-width:100% !important;vertical-align:top}
 pre{white-space:pre-wrap;word-break:break-word}
 a{color:${link}}
 blockquote{margin:0 0 0 10px;padding-left:10px;border-left:2px solid ${rule};color:${muted}}
@@ -2340,10 +2346,10 @@ p{margin:0 0 .7em}
 .ml-sb-secondary{display:inline-flex;align-items:center;gap:6px;height:30px;padding:0 12px;border-radius:9px;border:1px solid var(--dsw-alias-border-l1);background:var(--dsw-alias-bg-layer-1);color:var(--dsw-alias-label-primary);font:inherit;font-size:12.5px;cursor:pointer}
 .ml-sb-secondary:hover{border-color:var(--dsw-alias-border-l2)}
 .ml-sb-secondary:disabled{opacity:.55;cursor:default}
-.ml-sb-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:12px}
+.ml-sb-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px}
 
 /* messages */
-.ml-sb-msg{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;padding:10px 11px;margin-bottom:10px;background:var(--dsw-alias-bg-layer-1)}
+.ml-sb-msg{border:1px solid var(--dsw-alias-border-l1);border-radius:11px;padding:10px 11px;margin-bottom:10px;background:var(--dsw-alias-bg-layer-1);min-width:0;max-width:100%}
 .ml-sb-msg-out{border-style:dashed;background:var(--dsw-alias-bg-layer-2)}
 .ml-sb-msg-head{display:flex;align-items:center;gap:8px;margin-bottom:7px}
 .ml-sb-msg-who{flex:1 1 auto;min-width:0;display:flex;flex-direction:column}
