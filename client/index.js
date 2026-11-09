@@ -462,7 +462,11 @@ window.__ModuleLoader__.load({
     }
 
     /** The live page's registration entry point (see apply below). */
-    const runtime = (globalThis[Symbol.for('@mailly/dsh/client-runtime')] ??= { apply: null })
+    const runtime = (globalThis[Symbol.for('@mailly/dsh/client-runtime')] ??= {
+      apply: null,
+      // Set by the live page: the component it currently renders.
+      setPage: null,
+    })
 
     const testHelpers = {
       // Tests mount the page several times; the module-level page cache would
@@ -687,6 +691,31 @@ window.__ModuleLoader__.load({
         .replace('{{thread}}', (thread && thread.threadId) || '')
         .replace('{{subject}}', subject)
     }
+
+    // ---------------------------------------------------------------------
+    // Page host
+    //
+    // The slot renders this tiny component once; it renders the page the live
+    // module currently points at, so a reloaded bundle can swap the page
+    // without touching the slot registration.
+
+    let renderTick = null
+
+    function PageHost(props) {
+      const [, setTick] = useState(0)
+      useEffect(() => {
+        renderTick = setTick
+        return () => {
+          if (renderTick === setTick) renderTick = null
+        }
+      }, [])
+      const Page = props.pageRef.current
+      return h(Page, props.props)
+    }
+
+    // The slot renderer calls this component; the page inside it is rendered
+    // through the same stand-in-friendly path as the rest of the module.
+    PageHost.displayName = 'MaillyPageHost'
 
     // ---------------------------------------------------------------------
     // Sidebar icon
@@ -1925,6 +1954,40 @@ window.__ModuleLoader__.load({
       )
     }
 
+    /** The page component for one activation's context and translator. */
+    function makePageComponent(ctx, translate) {
+      return function MaillyPage(props) {
+        return h(
+          WorkbenchBoundary,
+          null,
+          h(MaillyWorkbench, {
+            ...props,
+            // The slot renderer hands the page a `t` seat for this namespace;
+            // use it so language switches re-render the page.
+            translate: (key) => {
+              try {
+                if (typeof props?.t === 'function') {
+                  const value = props.t(key)
+                  if (typeof value === 'string' && value && value !== key) return value
+                }
+              } catch {
+                // Fall back to the bound lookup below.
+              }
+              return translate(key)
+            },
+            getLocale: () => {
+              try {
+                return String(ctx.locale.getLocale().active || 'zh')
+              } catch {
+                return 'zh'
+              }
+            },
+            uiWorkspace: ctx.get('uiWorkspace'),
+          }),
+        )
+      }
+    }
+
     // ---------------------------------------------------------------------
     // Plugin
 
@@ -1948,16 +2011,20 @@ window.__ModuleLoader__.load({
         // rather than registering the page twice.
         if (runtime.apply && runtime.apply !== pluginApply) {
           // A reloaded bundle: the page keeps the first module instance, so
-          // hand the newest registration to it. Running both instances would
-          // make the second one's slot disposers remove the first one's
-          // registrations, and disposing the first one's would leave the page
-          // with no entry at all.
-          runtime.apply(ctx, pluginApply)
-          return
+          // hand it this module's page component. The page re-renders with the
+          // new code (styles included) and no slot is registered twice.
+          if (typeof runtime.setPage === 'function') {
+            const live = runtime.ctx || ctx
+            const translate = runtime.translate || ((key) => key)
+            runtime.setPage(makePageComponent(live, translate))
+            return
+          }
+          // No live page to hand to yet: register normally below.
         }
         // The live module keeps the newest code for a later reload to use.
         runtime.current = pluginApply
         runtime.apply = pluginApply
+        runtime.ctx = ctx
         // Prefer the locale service's own lookup (it knows every registered
         // pack); fall back to the bundled dictionaries.
         const bound = (() => {
@@ -2006,39 +2073,29 @@ window.__ModuleLoader__.load({
           ),
         )
 
+        // The page is a swappable reference: a reloaded bundle replaces the
+        // component behind it, so the rendered page picks up new code without
+        // re-registering the slot.
+        runtime.translate = translate
+        const pageRef = { current: makePageComponent(ctx, translate) }
+        runtime.setPage = (next) => {
+          pageRef.current = next
+          renderTick((value) => value + 1)
+        }
+        disposers.push(
+          ctx.slots.inject('sidebar.panellist', () =>
+            ctx.slots.register(
+              { name: 'sidebar.panellist', id: 'mailly', order: 20, label: () => translate('nav') },
+              MaillyIcon,
+            ),
+          ),
+        )
         disposers.push(
           ctx.slots.inject('main', () =>
             ctx.slots.register({ name: 'main', key: 'mailly', locale: 'mailly' }, (props) =>
-              h(
-                WorkbenchBoundary,
-                null,
-                h(MaillyWorkbench, {
-                  ...props,
-                  // The slot renderer hands the page a `t` seat for this
-                  // namespace; use it so language switches re-render the page.
-                  translate: (key) => {
-                    try {
-                      if (typeof props?.t === 'function') {
-                        const value = props.t(key)
-                        if (typeof value === 'string' && value && value !== key) return value
-                      }
-                    } catch {
-                      // Fall back to the bound lookup below.
-                    }
-                    return translate(key)
-                  },
-                  getLocale: () => {
-                    try {
-                      return String(ctx.locale.getLocale().active || 'zh')
-                    } catch {
-                      return 'zh'
-                    }
-                  },
-                  uiWorkspace: ctx.get('uiWorkspace'),
-                }),
-              ),
+              h(PageHost, { props, pageRef }),
             ),
-          )
+          ),
         )
     }
   },

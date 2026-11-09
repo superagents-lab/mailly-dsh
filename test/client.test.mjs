@@ -160,6 +160,17 @@ function resetHooks() {
 // back on.
 globalThis.__MAILLY_NO_PREFETCH = true
 
+/** Unwrap the slot's host component to the workbench it currently renders. */
+function pageFromHost(outer) {
+  // The slot renders PageHost; calling it yields the page component, which
+  // renders the boundary, which renders the workbench.
+  const page = outer.type(outer.props)
+  const Page = page.type
+  const boundary = Page(page.props)
+  const workbench = boundary.children[0]
+  return { workbench: workbench.type, workbenchProps: workbench.props }
+}
+
 function mountWorkbench({ keepCache = false, prefetch = false } = {}) {
   if (prefetch) delete globalThis.__MAILLY_NO_PREFETCH
   else globalThis.__MAILLY_NO_PREFETCH = true
@@ -168,10 +179,9 @@ function mountWorkbench({ keepCache = false, prefetch = false } = {}) {
   if (!keepCache && plugin.testHelpers && typeof plugin.testHelpers.resetPageCache === 'function') {
     plugin.testHelpers.resetPageCache()
   }
-  const main = registrations.find((entry) => entry.options.name === 'main')
+  const main = registrations.filter((entry) => entry.options.name === 'main').pop()
   const outer = main.component({})
-  const workbench = outer.children[0].type
-  const workbenchProps = outer.children[0].props
+  const { workbench, workbenchProps } = pageFromHost(outer)
   resetHooks()
   const renderOnce = () => {
     hookIndex = 0
@@ -271,10 +281,9 @@ const STATUS_FILE = {
 }
 
 test('drives list, reader, agent handoff and draft saving', async () => {
-  const main = registrations.find((entry) => entry.options.name === 'main')
+  const main = registrations.filter((entry) => entry.options.name === 'main').pop()
   const outer = main.component({})
-  const workbench = outer.children[0].type
-  const workbenchProps = outer.children[0].props
+  const { workbench, workbenchProps } = pageFromHost(outer)
 
   // --- stubbed Mailly API --------------------------------------------------
   const threadDetail = {
@@ -1031,9 +1040,9 @@ test('a reloaded bundle hands its code to the page already running it', () => {
     on: () => () => {},
   })
   assert.equal(registrations.length, before, 'the page is not registered a second time')
-  // The reloaded code re-registers the same two slots and disposes nothing,
-  // so a reload can never leave the page without its entry.
-  assert.deepEqual(calls, ['register', 'register'])
+  // The reloaded code does not touch the slots at all: it swaps the page the
+  // live host renders, so the entry survives and the page picks up new code.
+  assert.deepEqual(calls, [], 'no slot is registered a second time')
 })
 
 test('the hand-off button is readable in every theme', () => {
@@ -1048,4 +1057,36 @@ test('the hand-off button is readable in every theme', () => {
   assert.match(source, /\.ml-btn-agent\{[^}]*color:var\(--dsw-alias-bg-base\)/)
   // The hand-off button itself uses that class.
   assert.match(source, /className: 'ml-btn-agent',\s*\n\s*onClick: handToAgent/)
+})
+
+test('a reloaded bundle swaps the page the live host renders', () => {
+  // The live page points at a swappable component; a reload hands it a new
+  // one without registering any slot again.
+  const runtime = globalThis[Symbol.for('@mailly/dsh/client-runtime')]
+  assert.equal(typeof runtime.setPage, 'function', 'the live page exposes a swap point')
+  const swapped = []
+  const original = runtime.setPage
+  runtime.setPage = (next) => {
+    swapped.push(next)
+    original(next)
+  }
+  try {
+    const second = []
+    globalThis.window = { __ModuleLoader__: { load: (spec) => second.push(spec) } }
+    new Function('window', read())(globalThis.window)
+    const reloaded = second[0].factory((name) => {
+      if (name === 'react') return React
+      throw new Error(`unexpected require(${name})`)
+    })
+    reloaded.apply({
+      locale: { register: () => () => {}, bind: () => (key) => key, getLocale: () => ({ active: 'zh' }) },
+      slots: { inject: () => () => {}, register: () => () => {} },
+      get: () => undefined,
+      on: () => () => {},
+    })
+    assert.equal(swapped.length, 1, 'the reloaded code handed over its page')
+    assert.equal(swapped[0].name, 'MaillyPage')
+  } finally {
+    runtime.setPage = original
+  }
 })
